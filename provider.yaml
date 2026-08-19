@@ -1,3 +1,7 @@
+name: harvester
+version: 0.1.0
+description: Devsy on Harvester
+
 options:
   KUBECONFIG:
     description: Path to the Harvester kubeconfig.
@@ -23,8 +27,7 @@ options:
     description: Root disk size.
     default: 40Gi
   HARVESTER_SSH_HOST:
-    description: SSH host or address for the created VM.
-    required: true
+    description: Optional fixed SSH host. If omitted, Devsy discovers the VM IP from Harvester.
   HARVESTER_SSH_USER:
     description: SSH user inside the VM.
     default: ubuntu
@@ -33,17 +36,35 @@ options:
     default: "22"
   HARVESTER_SSH_FLAGS:
     description: Additional SSH flags.
+  HARVESTER_SSH_PUBLIC_KEY:
+    description: SSH public key to inject through cloud-init.
+  HARVESTER_USER_DATA:
+    description: Optional complete cloud-init user-data, overriding the generated SSH setup.
 agent:
   path: /opt/devsy/agent
   driver: docker
   inactivityTimeout: 30m
   exec:
-    shutdown: harvester-provider stop
+    shutdown: shutdown -h now
 exec:
-  init: harvester-provider init
-  command: harvester-provider command --command "${COMMAND}"
-  create: harvester-provider create
-  delete: harvester-provider delete
-  start: harvester-provider start
-  stop: harvester-provider stop
-  status: harvester-provider status
+  init: ${HARVESTER_PROVIDER} init
+  command: ${HARVESTER_PROVIDER} command --command "${COMMAND}"
+  create: ${HARVESTER_PROVIDER} create
+  delete: ${HARVESTER_PROVIDER} delete
+  start: ${HARVESTER_PROVIDER} start
+  stop: ${HARVESTER_PROVIDER} stop
+  status: ${HARVESTER_PROVIDER} status
+binaries:
+  HARVESTER_PROVIDER:
+    - os: linux
+      arch: amd64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.0/harvester-provider-linux-amd64
+    - os: linux
+      arch: arm64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.0/harvester-provider-linux-arm64
+    - os: darwin
+      arch: amd64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.0/harvester-provider-darwin-amd64
+    - os: darwin
+      arch: arm64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.0/harvester-provider-darwin-arm64
