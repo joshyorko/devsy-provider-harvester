@@ -15,10 +15,15 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p dist
+          go test ./...
+          go vet ./...
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${target%/*}; arch=${target#*/}
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags='-s -w' -o "dist/harvester-provider-$os-$arch" ./cmd/harvester-provider
           done
+          sha256sum dist/harvester-provider-* > dist/checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/harvester-provider-*
+          files: |
+            dist/harvester-provider-*
+            dist/checksums.txt

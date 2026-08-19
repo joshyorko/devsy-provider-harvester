@@ -1,10 +1,13 @@
 package main
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestBuildVMManifestUsesHarvesterImagePVCAndRunStrategy(t *testing.T) {
 	c := config{Namespace: "default", VMName: "machine-1", Image: "harvester-public/ubuntu", CPU: "4", Memory: "8Gi", Disk: "40Gi"}
-	manifest, err := buildVMManifest(c)
+	manifest, err := buildVMManifest(c, imageInfo{Namespace: "harvester-public", Name: "ubuntu", StorageClass: "longhorn-image-harvester-public-ubuntu", Format: "raw"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,6 +19,51 @@ func TestBuildVMManifestUsesHarvesterImagePVCAndRunStrategy(t *testing.T) {
 	}
 	if manifest.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName == "" {
 		t.Fatal("root disk PVC claim name is required")
+	}
+}
+
+func TestBuildPVCManifestUsesImageStorageClassAndBlockMode(t *testing.T) {
+	c := config{Namespace: "default", VMName: "machine-1", Disk: "40Gi"}
+	pvc, err := buildPVCManifest(c, imageInfo{Namespace: "harvester-public", Name: "ubuntu", StorageClass: "longhorn-image-harvester-public-ubuntu"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pvc.Spec["storageClassName"] != "longhorn-image-harvester-public-ubuntu" {
+		t.Fatalf("storage class: %#v", pvc.Spec["storageClassName"])
+	}
+	if pvc.Spec["volumeMode"] != "Block" {
+		t.Fatalf("volume mode: %#v", pvc.Spec["volumeMode"])
+	}
+}
+
+func TestBuildVMManifestUsesCDROMForISOImage(t *testing.T) {
+	c := config{Namespace: "default", VMName: "machine-1", CPU: "4", Memory: "8Gi", Disk: "40Gi"}
+	manifest, err := buildVMManifest(c, imageInfo{Namespace: "default", Name: "installer", StorageClass: "longhorn-image-default-installer", Format: "iso"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disks := manifest.Spec.Template.Spec.Domain["devices"].(map[string]any)["disks"].([]map[string]any)
+	if disks[0]["cdrom"] == nil {
+		t.Fatal("ISO image must be attached as a CD-ROM")
+	}
+}
+
+func TestParseImageReference(t *testing.T) {
+	got, err := parseImageReference("custom/image", "harvester-public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Namespace != "custom" || got.Name != "image" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestNotFoundErrorDetection(t *testing.T) {
+	if !isNotFoundError(errors.New("kubectl: virtualmachine not found: exit status 1")) {
+		t.Fatal("expected not-found error")
+	}
+	if isNotFoundError(errors.New("kubectl: forbidden: exit status 1")) {
+		t.Fatal("forbidden must not be treated as not found")
 	}
 }
 

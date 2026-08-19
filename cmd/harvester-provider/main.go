@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,7 @@ import (
 
 const commandTimeout = 2 * time.Minute
 
-type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData string }
+type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, ImageType, StorageClass, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData string }
 
 func env(n, fallback string) string {
 	if v := os.Getenv(n); v != "" {
@@ -24,7 +25,20 @@ func env(n, fallback string) string {
 	return fallback
 }
 func load() config {
-	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), os.Getenv("HARVESTER_IMAGE"), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA")}
+	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), os.Getenv("HARVESTER_IMAGE"), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA")}
+}
+
+type imageInfo struct{ Namespace, Name, StorageClass, Format string }
+
+func parseImageReference(ref, defaultNamespace string) (imageInfo, error) {
+	parts := strings.Split(ref, "/")
+	if len(parts) > 2 || ref == "" {
+		return imageInfo{}, errors.New("HARVESTER_IMAGE must be IMAGE or NAMESPACE/IMAGE")
+	}
+	if len(parts) == 1 {
+		return imageInfo{Namespace: defaultNamespace, Name: parts[0]}, nil
+	}
+	return imageInfo{Namespace: parts[0], Name: parts[1]}, nil
 }
 
 type metadata struct {
@@ -78,9 +92,12 @@ func validateConfig(c config, operation string) error {
 	if _, err := strconv.Atoi(c.SSHPort); err != nil {
 		return fmt.Errorf("HARVESTER_SSH_PORT must be numeric: %w", err)
 	}
+	if c.ImageType != "raw" && c.ImageType != "qcow2" && c.ImageType != "iso" {
+		return errors.New("HARVESTER_IMAGE_TYPE must be raw, qcow2, or iso")
+	}
 	return nil
 }
-func buildVMManifest(c config) (vmManifest, error) {
+func buildVMManifest(c config, image imageInfo) (vmManifest, error) {
 	cpu, err := strconv.Atoi(c.CPU)
 	if err != nil || cpu < 1 {
 		return vmManifest{}, errors.New("HARVESTER_CPU must be a positive integer")
@@ -89,6 +106,9 @@ func buildVMManifest(c config) (vmManifest, error) {
 		return vmManifest{}, errors.New("HARVESTER_MEMORY and HARVESTER_DISK are required")
 	}
 	claim := c.VMName + "-rootdisk"
+	if image.Format == "iso" {
+		claim = c.VMName + "-blankdisk"
+	}
 	var m vmManifest
 	m.APIVersion = "kubevirt.io/v1"
 	m.Kind = "VirtualMachine"
@@ -100,6 +120,16 @@ func buildVMManifest(c config) (vmManifest, error) {
 	m.Spec.Template.Spec.Volumes = []vmVolume{{Name: "rootdisk", PersistentVolumeClaim: &struct {
 		ClaimName string `json:"claimName"`
 	}{ClaimName: claim}}}
+	if image.Format == "iso" {
+		m.Spec.Template.Spec.Volumes = append(m.Spec.Template.Spec.Volumes, vmVolume{Name: "installer", PersistentVolumeClaim: &struct {
+			ClaimName string `json:"claimName"`
+		}{ClaimName: c.VMName + "-image"}})
+		disks := m.Spec.Template.Spec.Domain["devices"].(map[string]any)["disks"].([]map[string]any)
+		delete(disks[0], "disk")
+		disks[0]["cdrom"] = map[string]string{"bus": "sata"}
+		disks = append(disks, map[string]any{"name": "installer", "cdrom": map[string]string{"bus": "sata"}})
+		m.Spec.Template.Spec.Domain["devices"].(map[string]any)["disks"] = disks
+	}
 	userData := c.UserData
 	if userData == "" && c.SSHPublicKey != "" {
 		userData = "#cloud-config\nusers:\n  - name: " + c.SSHUser + "\n    sudo: ALL=(ALL) NOPASSWD:ALL\n    shell: /bin/bash\n    ssh_authorized_keys:\n      - " + c.SSHPublicKey + "\n"
@@ -110,15 +140,24 @@ func buildVMManifest(c config) (vmManifest, error) {
 	}
 	return m, nil
 }
-func buildPVCManifest(c config) (pvcManifest, error) {
-	if c.Image == "" {
-		return pvcManifest{}, errors.New("HARVESTER_IMAGE is required")
+func buildPVCManifest(c config, image imageInfo) (pvcManifest, error) {
+	if image.Name == "" || image.StorageClass == "" {
+		return pvcManifest{}, errors.New("Harvester image metadata must include a storage class")
 	}
-	image := c.Image
-	if !strings.Contains(image, "/") {
-		image = c.ImageNS + "/" + image
+	claim := c.VMName + "-rootdisk"
+	annotations := map[string]string{"harvesterhci.io/imageId": image.Namespace + "/" + image.Name}
+	if image.Format == "iso" {
+		claim = c.VMName + "-image"
 	}
-	return pvcManifest{APIVersion: "v1", Kind: "PersistentVolumeClaim", Metadata: metadata{Name: c.VMName + "-rootdisk", Namespace: c.Namespace, Annotations: map[string]string{"harvesterhci.io/imageId": image}}, Spec: map[string]any{"accessModes": []string{"ReadWriteMany"}, "resources": map[string]any{"requests": map[string]string{"storage": c.Disk}}}}, nil
+	pvc := pvcManifest{APIVersion: "v1", Kind: "PersistentVolumeClaim", Metadata: metadata{Name: claim, Namespace: c.Namespace, Annotations: annotations}, Spec: map[string]any{"accessModes": []string{"ReadWriteMany"}, "resources": map[string]any{"requests": map[string]string{"storage": c.Disk}}, "storageClassName": image.StorageClass, "volumeMode": "Block"}}
+	if image.Format == "iso" {
+		pvc.Spec["storageClassName"] = image.StorageClass
+		return pvc, nil
+	}
+	return pvc, nil
+}
+func buildBlankPVCManifest(c config, image imageInfo) pvcManifest {
+	return pvcManifest{APIVersion: "v1", Kind: "PersistentVolumeClaim", Metadata: metadata{Name: c.VMName + "-blankdisk", Namespace: c.Namespace}, Spec: map[string]any{"accessModes": []string{"ReadWriteMany"}, "resources": map[string]any{"requests": map[string]string{"storage": c.Disk}}, "storageClassName": c.StorageClass, "volumeMode": "Block"}}
 }
 func statusForVM(s *vmStatus, notFound bool) string {
 	if notFound || s == nil {
@@ -136,6 +175,9 @@ func statusForVM(s *vmStatus, notFound bool) string {
 		return "Busy"
 	}
 }
+func isNotFoundError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
+}
 
 func kubectl(c config, args ...string) ([]byte, error) {
 	prefix := []string{}
@@ -148,12 +190,47 @@ func kubectl(c config, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "kubectl", append(prefix, args...)...)
-	cmd.Stderr = os.Stderr
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return out, err
+	if err != nil {
+		return out, fmt.Errorf("kubectl: %s: %w", strings.TrimSpace(stderr.String()), err)
+	}
+	return out, nil
+}
+func resolveImage(c config) (imageInfo, error) {
+	image, err := parseImageReference(c.Image, c.ImageNS)
+	if err != nil {
+		return image, err
+	}
+	out, err := kubectl(c, "get", "virtualmachineimage", image.Name, "-n", image.Namespace, "-o", "json")
+	if err != nil {
+		return image, err
+	}
+	var payload struct {
+		Spec struct {
+			Backend string `json:"backend"`
+			URL     string `json:"url"`
+		} `json:"spec"`
+		Status struct {
+			StorageClassName string `json:"storageClassName"`
+		} `json:"status"`
+	}
+	if err = json.Unmarshal(out, &payload); err != nil {
+		return image, err
+	}
+	image.StorageClass = payload.Status.StorageClassName
+	if image.StorageClass == "" {
+		return image, errors.New("Harvester image has no resolved storage class yet")
+	}
+	image.Format = c.ImageType
+	if payload.Spec.Backend == "cdi" && image.Format == "raw" && strings.HasSuffix(strings.ToLower(payload.Spec.URL), ".iso") {
+		image.Format = "iso"
+	}
+	return image, nil
 }
 func applyJSON(c config, object any) error {
 	payload, err := json.Marshal(object)
@@ -179,21 +256,49 @@ func apply(c config) error {
 	if err := validateConfig(c, "create"); err != nil {
 		return err
 	}
-	pvc, err := buildPVCManifest(c)
+	image, err := resolveImage(c)
+	if err != nil {
+		return err
+	}
+	pvc, err := buildPVCManifest(c, image)
 	if err != nil {
 		return err
 	}
 	if err = applyJSON(c, pvc); err != nil {
 		return err
 	}
-	vm, err := buildVMManifest(c)
+	if image.Format == "iso" {
+		if c.StorageClass == "" {
+			return errors.New("HARVESTER_STORAGE_CLASS is required for ISO images")
+		}
+		if err = applyJSON(c, buildBlankPVCManifest(c, image)); err != nil {
+			return err
+		}
+	}
+	vm, err := buildVMManifest(c, image)
 	if err != nil {
 		return err
 	}
 	if err = applyJSON(c, vm); err != nil {
 		return err
 	}
-	return waitForVM(c, "Running")
+	if err = waitForVM(c, "Running"); err != nil {
+		return err
+	}
+	return waitForGuest(c)
+}
+func waitForGuest(c config) error {
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		host, err := sshHost(c)
+		if err == nil {
+			if err = sshRun(c, host, "command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1"); err == nil {
+				return nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return errors.New("timed out waiting for SSH and Docker readiness")
 }
 func readVMStatus(c config) (*vmStatus, error) {
 	out, err := kubectl(c, "get", "virtualmachine", c.VMName, "-n", c.Namespace, "-o", "json")
@@ -252,6 +357,9 @@ func sshCommand(c config, command string) error {
 	if err != nil {
 		return err
 	}
+	return sshRun(c, host, command)
+}
+func sshRun(c config, host, command string) error {
 	args := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-p", c.SSHPort}
 	if c.SSHFlags != "" {
 		args = append(args, strings.Fields(c.SSHFlags)...)
@@ -280,6 +388,8 @@ func main() {
 		_, err = kubectl(c, "delete", "virtualmachine", c.VMName, "-n", c.Namespace, "--ignore-not-found")
 		if err == nil {
 			_, err = kubectl(c, "delete", "pvc", c.VMName+"-rootdisk", "-n", c.Namespace, "--ignore-not-found")
+			_, _ = kubectl(c, "delete", "pvc", c.VMName+"-image", "-n", c.Namespace, "--ignore-not-found")
+			_, _ = kubectl(c, "delete", "pvc", c.VMName+"-blankdisk", "-n", c.Namespace, "--ignore-not-found")
 		}
 	case "start":
 		_, err = kubectl(c, "patch", "virtualmachine", c.VMName, "-n", c.Namespace, "--type=merge", "-p", `{"spec":{"runStrategy":"RerunOnFailure"}}`)
@@ -294,7 +404,7 @@ func main() {
 	case "status":
 		out, e := kubectl(c, "get", "virtualmachine", c.VMName, "-n", c.Namespace, "-o", "json")
 		if e != nil {
-			if strings.Contains(strings.ToLower(e.Error()), "not found") {
+			if isNotFoundError(e) {
 				fmt.Print("NotFound")
 				return
 			}
