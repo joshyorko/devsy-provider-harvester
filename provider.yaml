@@ -1,0 +1,49 @@
+options:
+  KUBECONFIG:
+    description: Path to the Harvester kubeconfig.
+    required: true
+  HARVESTER_CONTEXT:
+    description: Optional kubeconfig context for the Harvester cluster.
+  HARVESTER_NAMESPACE:
+    description: Namespace for the VirtualMachine resource.
+    default: default
+  HARVESTER_IMAGE:
+    description: Harvester image name or image reference used for the VM root disk.
+    required: true
+  HARVESTER_IMAGE_NAMESPACE:
+    description: Namespace containing the Harvester image.
+    default: harvester-public
+  HARVESTER_CPU:
+    description: VM CPU cores.
+    default: "4"
+  HARVESTER_MEMORY:
+    description: VM memory request.
+    default: 8Gi
+  HARVESTER_DISK:
+    description: Root disk size.
+    default: 40Gi
+  HARVESTER_SSH_HOST:
+    description: SSH host or address for the created VM.
+    required: true
+  HARVESTER_SSH_USER:
+    description: SSH user inside the VM.
+    default: ubuntu
+  HARVESTER_SSH_PORT:
+    description: SSH port inside the VM.
+    default: "22"
+  HARVESTER_SSH_FLAGS:
+    description: Additional SSH flags.
+agent:
+  path: /opt/devsy/agent
+  driver: docker
+  inactivityTimeout: 30m
+  exec:
+    shutdown: harvester-provider stop
+exec:
+  init: harvester-provider init
+  command: harvester-provider command --command "${COMMAND}"
+  create: harvester-provider create
+  delete: harvester-provider delete
+  start: harvester-provider start
+  stop: harvester-provider stop
+  status: harvester-provider status
