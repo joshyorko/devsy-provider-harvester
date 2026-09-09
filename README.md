@@ -2,7 +2,7 @@
 
 `devsy-provider-harvester` provisions Devsy machine providers as Harvester
 VirtualMachine resources and connects to the resulting Linux VM over SSH.
-Devsy downloads the provider helper from the latest GitHub release described by
+Devsy downloads the provider helper from the version-pinned GitHub release described by
 `provider.yaml`.
 
 ## Image selection

@@ -22,6 +22,20 @@ func TestBuildVMManifestUsesHarvesterImagePVCAndRunStrategy(t *testing.T) {
 	}
 }
 
+func TestBuildVMManifestSetsGuestMemory(t *testing.T) {
+	for _, memory := range []string{"2Gi", "8Gi", "512Mi"} {
+		c := config{Namespace: "default", VMName: "machine-1", CPU: "2", Memory: memory, Disk: "12Gi"}
+		manifest, err := buildVMManifest(c, imageInfo{Format: "qcow2"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		guest, ok := manifest.Spec.Template.Spec.Domain["memory"].(map[string]string)
+		if !ok || guest["guest"] != memory {
+			t.Fatalf("Harvester admission requires domain.memory.guest=%q, got %#v", memory, manifest.Spec.Template.Spec.Domain["memory"])
+		}
+	}
+}
+
 func TestBuildPVCManifestUsesImageStorageClassAndBlockMode(t *testing.T) {
 	c := config{Namespace: "default", VMName: "machine-1", Disk: "40Gi"}
 	pvc, err := buildPVCManifest(c, imageInfo{Namespace: "harvester-public", Name: "ubuntu", StorageClass: "longhorn-image-harvester-public-ubuntu"})

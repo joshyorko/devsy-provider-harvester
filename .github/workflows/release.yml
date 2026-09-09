@@ -21,9 +21,13 @@ jobs:
             os=${target%/*}; arch=${target#*/}
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags='-s -w' -o "dist/harvester-provider-$os-$arch" ./cmd/harvester-provider
           done
-          sha256sum dist/harvester-provider-* > dist/checksums.txt
+          test "$(python3 -c 'import re; print(re.search(r"^version: (.+)$", open("provider.yaml").read(), re.M)[1])')" = "${GITHUB_REF_NAME#v}"
+          cp provider.yaml dist/provider.yaml
+          (cd dist && sha256sum harvester-provider-* provider.yaml > checksums.txt)
+          (cd dist && sha256sum -c checksums.txt)
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/harvester-provider-*
             dist/checksums.txt
+            dist/provider.yaml
