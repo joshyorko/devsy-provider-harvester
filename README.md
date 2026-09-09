@@ -13,7 +13,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.7 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.8 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -40,6 +40,36 @@ are attached as a CD-ROM alongside a separate writable root disk. Supply
 `HARVESTER_SSH_PUBLIC_KEY` or complete `HARVESTER_USER_DATA` so cloud-init can
 bootstrap the guest; the guest image must provide SSH and Docker for the
 initial `driver: docker` configuration.
+
+### Saved Harvester templates and local files
+
+Choose **one** complete cloud-init source:
+
+- `HARVESTER_CLOUD_INIT_TEMPLATE=default/ubuntu-docker`: load the existing
+  Harvester ConfigMap's `data.cloudInit` using the provider's `KUBECONFIG` and
+  `HARVESTER_CONTEXT`. A bare name uses `HARVESTER_NAMESPACE`.
+- `HARVESTER_USER_DATA_FILE=C:\Users\you\.config\ubuntu-docker.yaml`: read a file
+  on the client running Devsy. Windows paths are not paths on the cluster.
+- `HARVESTER_USER_DATA`: inline cloud-init content, as before.
+
+For example (PowerShell or another shell):
+
+```sh
+devsy provider set harvester -o HARVESTER_CLOUD_INIT_TEMPLATE=default/ubuntu-docker
+```
+
+Clear any previously configured alternate source; multiple sources fail rather
+than silently selecting one. Missing/empty templates and files fail during
+provider init and before VM/PVC creation. Template contents are fetched again
+when creating a VM, not when starting an existing VM. Existing VMs are not
+reconfigured when the template changes. Source contents are not printed by the
+resolver. ConfigMaps and VM cloud-init are not secret vaults: do not put private
+keys, kubeconfigs or API credentials in them.
+
+A complete source must include the intended guest SSH user's authorized public
+key and Docker setup. `HARVESTER_SSH_PUBLIC_KEY` is only used for the generated
+fallback when no complete source is selected; it is not merged into a template.
+The matching private key stays on the client or in its SSH agent.
 
 ### Cloud-init CLI quoting and network access
 

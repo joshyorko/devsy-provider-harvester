@@ -1,5 +1,5 @@
 name: harvester
-version: v0.1.7
+version: v0.1.8
 description: Devsy on Harvester
 
 options:
@@ -46,6 +46,10 @@ options:
     description: Additional SSH flags.
   HARVESTER_SSH_PUBLIC_KEY:
     description: SSH public key to inject through cloud-init.
+  HARVESTER_CLOUD_INIT_TEMPLATE:
+    description: Harvester cloud-init ConfigMap reference (NAMESPACE/NAME or NAME in the VM namespace). Reads data.cloudInit using this provider kubeconfig/context.
+  HARVESTER_USER_DATA_FILE:
+    description: Local cloud-init file path on the client running Devsy (use an absolute Windows path on Windows).
   HARVESTER_USER_DATA:
     description: Optional complete cloud-init user-data, overriding the generated SSH setup.
     password: true
@@ -88,16 +92,16 @@ binaries:
   HARVESTER_PROVIDER:
     - os: linux
       arch: amd64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-linux-amd64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.8/harvester-provider-linux-amd64
     - os: linux
       arch: arm64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-linux-arm64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.8/harvester-provider-linux-arm64
     - os: darwin
       arch: amd64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-darwin-amd64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.8/harvester-provider-darwin-amd64
     - os: darwin
       arch: arm64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-darwin-arm64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.8/harvester-provider-darwin-arm64
     - os: windows
       arch: amd64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-windows-amd64.exe
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.8/harvester-provider-windows-amd64.exe

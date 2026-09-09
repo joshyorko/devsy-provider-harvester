@@ -16,7 +16,7 @@ import (
 
 const commandTimeout = 2 * time.Minute
 
-type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, ImageType, StorageClass, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData string }
+type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, ImageType, StorageClass, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData, UserDataFile, CloudInitTemplate string }
 
 func env(n, fallback string) string {
 	if v := os.Getenv(n); v != "" {
@@ -25,7 +25,7 @@ func env(n, fallback string) string {
 	return fallback
 }
 func load() config {
-	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), os.Getenv("HARVESTER_IMAGE"), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA")}
+	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), os.Getenv("HARVESTER_IMAGE"), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA"), os.Getenv("HARVESTER_USER_DATA_FILE"), os.Getenv("HARVESTER_CLOUD_INIT_TEMPLATE")}
 }
 
 type imageInfo struct{ Namespace, Name, StorageClass, Format string }
@@ -87,7 +87,7 @@ func validateConfig(c config, operation string) error {
 		return errors.New("HARVESTER_IMAGE is required")
 	}
 	if operation == "create" && c.SSHPublicKey == "" && c.UserData == "" && c.SSHHost == "" {
-		return errors.New("HARVESTER_SSH_PUBLIC_KEY or HARVESTER_USER_DATA is required when SSH host discovery is enabled")
+		return errors.New("HARVESTER_SSH_PUBLIC_KEY or a cloud-init source (HARVESTER_USER_DATA, HARVESTER_USER_DATA_FILE, HARVESTER_CLOUD_INIT_TEMPLATE) is required when SSH host discovery is enabled")
 	}
 	if _, err := strconv.Atoi(c.SSHPort); err != nil {
 		return fmt.Errorf("HARVESTER_SSH_PORT must be numeric: %w", err)
@@ -270,6 +270,11 @@ func applyJSON(c config, object any) error {
 	return cmd.Run()
 }
 func apply(c config) error {
+	userData, err := resolveUserData(c)
+	if err != nil {
+		return err
+	}
+	c.UserData = userData
 	if err := validateConfig(c, "create"); err != nil {
 		return err
 	}
@@ -400,7 +405,10 @@ func main() {
 	var err error
 	switch op {
 	case "init":
-		_, err = kubectl(c, "version", "--request-timeout=10s")
+		_, err = resolveUserData(c)
+		if err == nil {
+			_, err = kubectl(c, "version", "--request-timeout=10s")
+		}
 	case "create":
 		err = apply(c)
 	case "delete":
