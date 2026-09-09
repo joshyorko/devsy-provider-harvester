@@ -9,7 +9,7 @@ import sys
 def package(source, dist, tag):
     text = source.read_text()
     match = re.search(r"^version: (.+)$", text, re.M)
-    if match is None or tag != "v" + match[1]:
+    if match is None or tag != match[1]:
         raise ValueError("release tag must match provider version")
 
     def asset(match):
@@ -20,7 +20,7 @@ def package(source, dist, tag):
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         return "      path: " + url + "\n      checksum: " + digest
 
-    text, count = re.subn(r"^      path: (https://[^\n]+)$", asset, text, flags=re.M)
+    text, count = re.subn(r"^      path: (https://[^\n]+/harvester-provider[^\n]+)$", asset, text, flags=re.M)
     if count != 5:
         raise ValueError("expected five platform binaries")
     (dist / "provider.yaml").write_text(text)

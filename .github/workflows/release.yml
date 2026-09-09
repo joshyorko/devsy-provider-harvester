@@ -52,3 +52,25 @@ jobs:
             dist/harvester-provider-*
             dist/checksums.txt
             dist/provider.yaml
+  windows-install:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - name: Install public provider and managed kubectl on Windows
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/devsy-org/devsy/releases/download/v1.17.0/devsy-windows-amd64.exe -OutFile devsy.exe
+          $homeDir = Join-Path $env:RUNNER_TEMP "harvester-install"
+          $manifest = "https://github.com/joshyorko/devsy-provider-harvester/releases/download/$env:GITHUB_REF_NAME/provider.yaml"
+          & ./devsy.exe provider add $manifest --use=false --home $homeDir
+          if ($LASTEXITCODE -ne 0) { throw "Windows provider install failed" }
+          $kubectl = Get-ChildItem $homeDir -Recurse -Filter kubectl.exe | Select-Object -First 1
+          if (-not $kubectl) { throw "Managed kubectl.exe was not downloaded" }
+          & $kubectl.FullName version --client
+          if ($LASTEXITCODE -ne 0) { throw "Managed kubectl.exe did not run" }
+          $helper = Get-ChildItem $homeDir -Recurse -Filter harvester-provider-windows-amd64.exe | Select-Object -First 1
+          if (-not $helper) { throw "Windows provider helper was not downloaded" }
+          & $helper.FullName unsupported-operation
+          if ($LASTEXITCODE -ne 2) { throw "Downloaded provider helper did not run" }
+          Write-Output "WINDOWS_PROVIDER_INSTALL_AND_MANAGED_KUBECTL_OK"
+          exit 0

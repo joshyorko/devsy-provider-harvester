@@ -2,9 +2,35 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
+	"strings"
 	"testing"
 )
+
+func init() {
+	if os.Getenv("HARVESTER_TEST_START_CHILD") == "1" {
+		body, _ := io.ReadAll(os.Stdin)
+		args := strings.Join(os.Args[1:], " ")
+		if args != "replace --raw /apis/subresources.kubevirt.io/v1/namespaces/default/virtualmachines/machine-1/start -f -" || string(body) != "{}" {
+			os.Stderr.WriteString("start must use the KubeVirt start subresource with an empty JSON object")
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+}
+
+func TestStartUsesKubeVirtStartSubresource(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HARVESTER_TEST_START_CHILD", "1")
+	t.Setenv("HARVESTER_KUBECTL_PATH", executable)
+	if err := requestVMStart(config{Namespace: "default", VMName: "machine-1"}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestKubectlExplicitPathWorksWithoutShellPATH(t *testing.T) {
 	if os.Getenv("HARVESTER_TEST_KUBECTL_CHILD") == "1" {
@@ -16,7 +42,8 @@ func TestKubectlExplicitPathWorksWithoutShellPATH(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HARVESTER_TEST_KUBECTL_CHILD", "1")
-	t.Setenv("HARVESTER_KUBECTL_PATH", executable)
+	t.Setenv("HARVESTER_KUBECTL_PATH", "kubectl")
+	t.Setenv("KUBECTL", executable)
 	t.Setenv("PATH", "")
 	out, err := kubectl(config{}, "-test.run=TestKubectlExplicitPathWorksWithoutShellPATH")
 	if err != nil {

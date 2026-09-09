@@ -8,6 +8,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class PackagingTest(unittest.TestCase):
+    def test_desktop_version_and_managed_kubectl(self):
+        text = (ROOT / "provider.yaml").read_text()
+        self.assertRegex(text, r"(?m)^version: v[0-9]+\.[0-9]+\.[0-9]+$")
+        self.assertIn("  KUBECTL:", text)
+        self.assertIn("kubectl.exe", text)
+
     def test_windows_amd64_is_packaged(self):
         manifest = (ROOT / 'provider.yaml').read_text()
         self.assertRegex(manifest, r'os: windows\s+arch: amd64\s+path: https://[^\n]+/harvester-provider-windows-amd64\.exe')
@@ -22,14 +28,14 @@ class PackagingTest(unittest.TestCase):
             manifest = (ROOT / 'provider.yaml').read_text()
             (root / 'provider.yaml').write_text(manifest)
             import re
-            version = re.search(r'^version: (.+)$', manifest, re.M)[1]
+            version = re.search(r'^version: (.+)$', manifest, re.M)[1].removeprefix('v')
             for name in re.findall(r'/([^/\n]+)$', manifest, re.M):
                 if name.startswith('harvester-provider-'):
                     (root / 'dist' / name).write_bytes(b'synthetic packaging fixture: ' + name.encode())
             result = subprocess.run(['python3', str(ROOT / 'scripts/package_release.py'), 'v' + version], cwd=root, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             text = (root / 'dist/provider.yaml').read_text()
-            pairs = re.findall(r'path: (.+)\n      checksum: (\w+)', text)
+            pairs = re.findall(r'path: (.+/harvester-provider[^\n]+)\n      checksum: (\w+)', text)
             self.assertEqual(len(pairs), 5)
             for url, checksum in pairs:
                 self.assertIn('/releases/download/v' + version + '/', url)

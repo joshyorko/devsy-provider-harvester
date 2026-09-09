@@ -179,7 +179,23 @@ func isNotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
+func kubectlPath() string {
+	if path := os.Getenv("HARVESTER_KUBECTL_PATH"); path != "" && path != "kubectl" {
+		return path
+	}
+	return env("KUBECTL", "kubectl")
+}
+
+func requestVMStart(c config) error {
+	endpoint := fmt.Sprintf("/apis/subresources.kubevirt.io/v1/namespaces/%s/virtualmachines/%s/start", c.Namespace, c.VMName)
+	_, err := kubectlInput(c, []byte("{}"), "replace", "--raw", endpoint, "-f", "-")
+	return err
+}
+
 func kubectl(c config, args ...string) ([]byte, error) {
+	return kubectlInput(c, nil, args...)
+}
+func kubectlInput(c config, input []byte, args ...string) ([]byte, error) {
 	prefix := []string{}
 	if c.Kubeconfig != "" {
 		prefix = append(prefix, "--kubeconfig", c.Kubeconfig)
@@ -189,7 +205,8 @@ func kubectl(c config, args ...string) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, env("HARVESTER_KUBECTL_PATH", "kubectl"), append(prefix, args...)...)
+	cmd := exec.CommandContext(ctx, kubectlPath(), append(prefix, args...)...)
+	cmd.Stdin = bytes.NewReader(input)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -247,7 +264,7 @@ func applyJSON(c config, object any) error {
 	args = append(args, "apply", "-f", "-")
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, env("HARVESTER_KUBECTL_PATH", "kubectl"), args...)
+	cmd := exec.CommandContext(ctx, kubectlPath(), args...)
 	cmd.Stdin = strings.NewReader(string(payload))
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
@@ -394,7 +411,7 @@ func main() {
 			_, _ = kubectl(c, "delete", "pvc", c.VMName+"-blankdisk", "-n", c.Namespace, "--ignore-not-found")
 		}
 	case "start":
-		_, err = kubectl(c, "patch", "virtualmachine", c.VMName, "-n", c.Namespace, "--type=merge", "-p", `{"spec":{"runStrategy":"RerunOnFailure"}}`)
+		err = requestVMStart(c)
 		if err == nil {
 			err = waitForVM(c, "Running")
 		}

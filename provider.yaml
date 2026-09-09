@@ -1,11 +1,10 @@
 name: harvester
-version: 0.1.6
+version: v0.1.7
 description: Devsy on Harvester
 
 options:
   HARVESTER_KUBECTL_PATH:
     description: Path to kubectl (use an absolute path when Desktop does not inherit your shell PATH).
-    default: kubectl
   KUBECONFIG:
     description: Path to the Harvester kubeconfig.
     required: true
@@ -65,19 +64,40 @@ exec:
   stop: ${HARVESTER_PROVIDER} stop
   status: ${HARVESTER_PROVIDER} status
 binaries:
+  KUBECTL:
+    - os: linux
+      arch: amd64
+      path: https://dl.k8s.io/release/v1.35.0/bin/linux/amd64/kubectl
+      checksum: a2e984a18a0c063279d692533031c1eff93a262afcc0afdc517375432d060989
+    - os: linux
+      arch: arm64
+      path: https://dl.k8s.io/release/v1.35.0/bin/linux/arm64/kubectl
+      checksum: 58f82f9fe796c375c5c4b8439850b0f3f4d401a52434052f2df46035a8789e25
+    - os: darwin
+      arch: amd64
+      path: https://dl.k8s.io/release/v1.35.0/bin/darwin/amd64/kubectl
+      checksum: 2447cb78911b10a667202b078eeb30541ec78d1280c3682921dc81607e148d96
+    - os: darwin
+      arch: arm64
+      path: https://dl.k8s.io/release/v1.35.0/bin/darwin/arm64/kubectl
+      checksum: cf699c56340dc775230fde4ef84237d27563ea6ef52164c7d078072b586c3918
+    - os: windows
+      arch: amd64
+      path: https://dl.k8s.io/release/v1.35.0/bin/windows/amd64/kubectl.exe
+      checksum: 4c5d14b8673bd55f813a8965ad70d5150e3960ee5f274025e2286aea3a0fa8b6
   HARVESTER_PROVIDER:
     - os: linux
       arch: amd64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.6/harvester-provider-linux-amd64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-linux-amd64
     - os: linux
       arch: arm64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.6/harvester-provider-linux-arm64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-linux-arm64
     - os: darwin
       arch: amd64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.6/harvester-provider-darwin-amd64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-darwin-amd64
     - os: darwin
       arch: arm64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.6/harvester-provider-darwin-arm64
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-darwin-arm64
     - os: windows
       arch: amd64
-      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.6/harvester-provider-windows-amd64.exe
+      path: https://github.com/joshyorko/devsy-provider-harvester/releases/download/v0.1.7/harvester-provider-windows-amd64.exe
