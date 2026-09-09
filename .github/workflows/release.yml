@@ -5,7 +5,28 @@ on:
 permissions:
   contents: write
 jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Test Windows helper
+        shell: pwsh
+        run: |
+          go test ./... -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -o harvester-provider.exe ./cmd/harvester-provider
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $output = & ./harvester-provider.exe unsupported-operation 2>&1
+          if ($LASTEXITCODE -ne 2 -or "$output" -notmatch "usage: harvester-provider") { throw "Windows executable smoke test failed: $output" }
+          Write-Output "Native Windows amd64 helper smoke test passed"
+          exit 0
   release:
+    needs: windows
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,9 +38,10 @@ jobs:
           mkdir -p dist
           go test ./...
           go vet ./...
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             os=${target%/*}; arch=${target#*/}
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags='-s -w' -o "dist/harvester-provider-$os-$arch" ./cmd/harvester-provider
+            suffix=""; if [ "$os" = windows ]; then suffix=".exe"; fi
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags='-s -w' -o "dist/harvester-provider-$os-$arch$suffix" ./cmd/harvester-provider
           done
           python3 -m unittest discover -s scripts -v
           python3 scripts/package_release.py "$GITHUB_REF_NAME"

@@ -21,8 +21,8 @@ def package(source, dist, tag):
         return "      path: " + url + "\n      checksum: " + digest
 
     text, count = re.subn(r"^      path: (https://[^\n]+)$", asset, text, flags=re.M)
-    if count != 4:
-        raise ValueError("expected four platform binaries")
+    if count != 5:
+        raise ValueError("expected five platform binaries")
     (dist / "provider.yaml").write_text(text)
     files = sorted(dist.glob("harvester-provider-*")) + [dist / "provider.yaml"]
     (dist / "checksums.txt").write_text("".join(hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name + "\n" for p in files))

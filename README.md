@@ -13,7 +13,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.4 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.5 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -31,6 +31,22 @@ are attached as a CD-ROM alongside a separate writable root disk. Supply
 `HARVESTER_SSH_PUBLIC_KEY` or complete `HARVESTER_USER_DATA` so cloud-init can
 bootstrap the guest; the guest image must provide SSH and Docker for the
 initial `driver: docker` configuration.
+
+### Cloud-init CLI quoting and network access
+
+`devsy machine create --provider-option` parses each argument as CSV. Wrap a
+complete `HARVESTER_USER_DATA=...` value in CSV quotes (double embedded quotes),
+including all newlines, rather than passing unquoted multiline text. Workspace
+`up --provider-option` uses an array flag and does not need this CSV layer.
+
+The default VM uses the pod network. Your client must route to its IP, or use a
+scoped SSH proxy. For example, an executable wrapper around
+`virtctl --kubeconfig ... --context ... port-forward --stdio=true vm/NAME/NAMESPACE 22`
+can be supplied with `HARVESTER_SSH_HOST=127.0.0.1` and
+`HARVESTER_SSH_FLAGS=-o ProxyCommand=/absolute/path/to/wrapper`. This uses the
+authenticated Kubernetes API without exposing a node port or changing cluster
+network policy. SSH flags currently accept simple whitespace-separated tokens;
+put commands containing spaces in a wrapper.
 
 ## Status
 

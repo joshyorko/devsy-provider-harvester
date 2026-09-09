@@ -8,6 +8,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class PackagingTest(unittest.TestCase):
+    def test_windows_amd64_is_packaged(self):
+        manifest = (ROOT / 'provider.yaml').read_text()
+        self.assertRegex(manifest, r'os: windows\s+arch: amd64\s+path: https://[^\n]+/harvester-provider-windows-amd64\.exe')
+        workflow = (ROOT / '.github/workflows/release.yml').read_text()
+        self.assertIn('windows/amd64', workflow)
+        self.assertIn('windows-latest', workflow)
+
     def test_release_has_pinned_binaries_with_checksums(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -23,7 +30,7 @@ class PackagingTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             text = (root / 'dist/provider.yaml').read_text()
             pairs = re.findall(r'path: (.+)\n      checksum: (\w+)', text)
-            self.assertEqual(len(pairs), 4)
+            self.assertEqual(len(pairs), 5)
             for url, checksum in pairs:
                 self.assertIn('/releases/download/v' + version + '/', url)
                 self.assertEqual(checksum, hashlib.sha256((root / 'dist' / url.rsplit('/', 1)[1]).read_bytes()).hexdigest())
