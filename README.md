@@ -5,6 +5,22 @@ VirtualMachine resources and connects to the resulting Linux VM over SSH.
 Devsy downloads the provider helper from the version-pinned GitHub release described by
 `provider.yaml`.
 
+## Install or update
+
+Use the canonical GitHub source (without an `https://` prefix) so Devsy can
+discover releases and consume the checksummed release manifest:
+
+```sh
+devsy provider add github.com/joshyorko/devsy-provider-harvester
+# Preserve an existing registration and its saved options:
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.3 --use=false
+devsy provider init harvester
+devsy provider versions harvester --json --no-cache
+```
+
+The release asset `provider.yaml` includes per-platform SHA-256 checksums;
+the repository manifest is the release template, not the recommended install URL.
+
 ## Image selection
 
 The VM root disk is selected with `HARVESTER_IMAGE` and
