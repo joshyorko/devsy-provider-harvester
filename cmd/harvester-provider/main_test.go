@@ -2,8 +2,30 @@ package main
 
 import (
 	"errors"
+	"os"
 	"testing"
 )
+
+func TestKubectlExplicitPathWorksWithoutShellPATH(t *testing.T) {
+	if os.Getenv("HARVESTER_TEST_KUBECTL_CHILD") == "1" {
+		os.Stdout.WriteString("explicit-kubectl-path-ok")
+		os.Exit(0)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HARVESTER_TEST_KUBECTL_CHILD", "1")
+	t.Setenv("HARVESTER_KUBECTL_PATH", executable)
+	t.Setenv("PATH", "")
+	out, err := kubectl(config{}, "-test.run=TestKubectlExplicitPathWorksWithoutShellPATH")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "explicit-kubectl-path-ok" {
+		t.Fatalf("unexpected output %q", out)
+	}
+}
 
 func TestSSHTransportHasNoSessionDeadline(t *testing.T) {
 	cmd := sshExecCommand(config{SSHPort: "22", SSHUser: "ubuntu"}, "host", "long-running command")

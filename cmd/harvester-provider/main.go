@@ -189,7 +189,7 @@ func kubectl(c config, args ...string) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "kubectl", append(prefix, args...)...)
+	cmd := exec.CommandContext(ctx, env("HARVESTER_KUBECTL_PATH", "kubectl"), append(prefix, args...)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -247,7 +247,7 @@ func applyJSON(c config, object any) error {
 	args = append(args, "apply", "-f", "-")
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd := exec.CommandContext(ctx, env("HARVESTER_KUBECTL_PATH", "kubectl"), args...)
 	cmd.Stdin = strings.NewReader(string(payload))
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()

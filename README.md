@@ -13,13 +13,22 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.5 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.6 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
 
 The release asset `provider.yaml` includes per-platform SHA-256 checksums;
 the repository manifest is the release template, not the recommended install URL.
+
+## Desktop and Windows prerequisites
+
+Windows amd64, Linux amd64/arm64, and macOS amd64/arm64 helpers are packaged.
+Install `kubectl` and OpenSSH on the client. Desktop may not inherit your shell's
+PATH. Set `HARVESTER_KUBECTL_PATH` to the absolute kubectl executable path using
+Desktop provider options or `devsy provider set harvester -o HARVESTER_KUBECTL_PATH=<path>`.
+Use a kubeconfig path valid on that client; kubeconfigs and private SSH keys are
+not distributed with the provider. Windows uses the same Linux SSH/Docker guest.
 
 ## Image selection
 
