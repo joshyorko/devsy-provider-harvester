@@ -360,16 +360,18 @@ func sshCommand(c config, command string) error {
 	return sshRun(c, host, command)
 }
 func sshRun(c config, host, command string) error {
+	x := sshExecCommand(c, host, command)
+	x.Stdin, x.Stdout, x.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return x.Run()
+}
+func sshExecCommand(c config, host, command string) *exec.Cmd {
 	args := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-p", c.SSHPort}
 	if c.SSHFlags != "" {
 		args = append(args, strings.Fields(c.SSHFlags)...)
 	}
 	args = append(args, c.SSHUser+"@"+host, command)
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
-	defer cancel()
-	x := exec.CommandContext(ctx, "ssh", args...)
-	x.Stdin, x.Stdout, x.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return x.Run()
+	// This is Devsy's long-lived transport, not a bounded control-plane call.
+	return exec.Command("ssh", args...)
 }
 
 func main() {

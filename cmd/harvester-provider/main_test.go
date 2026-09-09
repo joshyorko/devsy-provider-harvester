@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func TestSSHTransportHasNoSessionDeadline(t *testing.T) {
+	cmd := sshExecCommand(config{SSHPort: "22", SSHUser: "ubuntu"}, "host", "long-running command")
+	if cmd.Cancel != nil {
+		t.Fatal("Devsy SSH transports must remain open for the session lifetime")
+	}
+}
+
 func TestBuildVMManifestUsesHarvesterImagePVCAndRunStrategy(t *testing.T) {
 	c := config{Namespace: "default", VMName: "machine-1", Image: "harvester-public/ubuntu", CPU: "4", Memory: "8Gi", Disk: "40Gi"}
 	manifest, err := buildVMManifest(c, imageInfo{Namespace: "harvester-public", Name: "ubuntu", StorageClass: "longhorn-image-harvester-public-ubuntu", Format: "raw"})
