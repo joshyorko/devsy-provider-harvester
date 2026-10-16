@@ -13,7 +13,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.10 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.11 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -114,6 +114,13 @@ provider output as logs, so this provider-only integration cannot add structured
 Launch activity timeline steps. Status responses and SSH command output remain
 free of progress messages; cloud-init content and credentials are not logged by
 the progress reporter.
+
+Deletion waits for the VM and its dependent resources using foreground
+propagation, then attempts all expected disk-claim deletions. Any actual cleanup
+failure makes the provider command fail; missing resources remain safe to retry.
+Completion logs confirm VM and PVC removal, not physical backing-storage
+reclamation. Devsy's explicit force-delete behavior can still remove its local
+record after a provider failure; this provider does not change that policy.
 
 ## Status
 

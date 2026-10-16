@@ -25,6 +25,21 @@ func init() {
 	case "fake-kubectl":
 		args := strings.Join(os.Args[1:], " ")
 		switch {
+		case strings.HasPrefix(args, "delete "):
+			if file := os.Getenv("HARVESTER_TEST_DELETE_CALLS"); file != "" {
+				f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+				if err != nil {
+					os.Exit(2)
+				}
+				json.NewEncoder(f).Encode(os.Args[1:])
+				f.Close()
+			}
+			for _, target := range strings.Split(os.Getenv("HARVESTER_TEST_DELETE_FAILURES"), ",") {
+				if target != "" && strings.Contains(args, " "+target+" ") {
+					os.Stderr.WriteString("permission denied deleting " + target)
+					os.Exit(7)
+				}
+			}
 		case strings.Contains(args, "get virtualmachineimage"):
 			if os.Getenv("HARVESTER_TEST_IMAGE_FAILURE") == "1" {
 				os.Stderr.WriteString("image is unavailable")
@@ -288,5 +303,74 @@ func TestGuestReadinessProbeBoundsProxyPipeCleanup(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("proxy-held output pipes blocked readiness cancellation")
+	}
+}
+
+func TestDeleteReportsDiskFailuresAndContinuesCleanup(t *testing.T) {
+	exe := lifecycleFixture(t)
+	t.Setenv("HARVESTER_VM_NAME", "machine-1")
+	for _, failures := range []string{"machine-1-image", "machine-1-blankdisk", "machine-1-rootdisk,machine-1-blankdisk"} {
+		t.Run(failures, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "deletes.jsonl")
+			t.Setenv("HARVESTER_TEST_DELETE_CALLS", file)
+			t.Setenv("HARVESTER_TEST_DELETE_FAILURES", failures)
+			out, stderr, err := runLifecycleFixture(t, exe, "delete")
+			if err == nil {
+				t.Fatalf("cleanup incorrectly succeeded when deleting %s failed", failures)
+			}
+			for _, name := range strings.Split(failures, ",") {
+				if !strings.Contains(stderr, name) {
+					t.Fatalf("missing cleanup error for %s: %q", name, stderr)
+				}
+			}
+			if strings.Contains(out, "VM and PVC deletion confirmed") {
+				t.Fatal("failed cleanup reported completion")
+			}
+			data, readErr := os.ReadFile(file)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if len(lines) != 4 {
+				t.Fatalf("expected VM plus all three disk cleanup attempts, got %d: %s", len(lines), data)
+			}
+		})
+	}
+}
+
+func TestDeleteConfirmsVMBeforeDeletingDisks(t *testing.T) {
+	exe := lifecycleFixture(t)
+	t.Setenv("HARVESTER_VM_NAME", "machine-1")
+	file := filepath.Join(t.TempDir(), "deletes.jsonl")
+	t.Setenv("HARVESTER_TEST_DELETE_CALLS", file)
+	out, stderr, err := runLifecycleFixture(t, exe, "delete")
+	if err != nil || stderr != "" || !strings.Contains(out, "VM and PVC deletion confirmed") {
+		t.Fatalf("expected confirmed cleanup: %q %q %v", out, stderr, err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	for index, line := range lines {
+		var args []string
+		if err := json.Unmarshal([]byte(line), &args); err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "--wait=true") {
+			t.Fatalf("deletion does not explicitly wait for confirmation: %v", args)
+		}
+		if index == 0 && (!strings.Contains(joined, "virtualmachine machine-1") || !strings.Contains(joined, "--cascade=foreground")) {
+			t.Fatalf("first deletion must wait for the VM and dependents: %v", args)
+		}
+	}
+	if len(lines) != 4 {
+		t.Fatalf("expected VM plus three disk checks, got %d", len(lines))
+	}
+	t.Setenv("HARVESTER_TEST_DELETE_FAILURES", "machine-1")
+	out, _, err = runLifecycleFixture(t, exe, "delete")
+	if err == nil || strings.Contains(out, "VM and PVC deletion confirmed") {
+		t.Fatalf("VM deletion failure was not propagated: %q %v", out, err)
 	}
 }

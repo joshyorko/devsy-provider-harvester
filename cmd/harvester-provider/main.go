@@ -480,6 +480,26 @@ func sshExecCommand(c config, host, command string) *exec.Cmd {
 	return exec.Command("ssh", args...)
 }
 
+func deleteMachine(c config) error {
+	progress("Deleting virtual machine; waiting for VM and dependent resources")
+	if _, err := kubectl(c, "delete", "virtualmachine", c.VMName, "-n", c.Namespace, "--ignore-not-found", "--cascade=foreground", "--wait=true"); err != nil {
+		return err
+	}
+	progress("Virtual machine deletion confirmed; deleting disk claims")
+	var failures []error
+	for _, suffix := range []string{"-rootdisk", "-image", "-blankdisk"} {
+		name := c.VMName + suffix
+		if _, err := kubectl(c, "delete", "pvc", name, "-n", c.Namespace, "--ignore-not-found", "--wait=true"); err != nil {
+			failures = append(failures, fmt.Errorf("delete disk claim %s: %w", name, err))
+		}
+	}
+	if err := errors.Join(failures...); err != nil {
+		return err
+	}
+	progress("VM and PVC deletion confirmed")
+	return nil
+}
+
 func main() {
 	c := load()
 	op := "command"
@@ -504,13 +524,7 @@ func main() {
 	case "create":
 		err = apply(c)
 	case "delete":
-		progress("Deleting virtual machine and its disks")
-		_, err = kubectl(c, "delete", "virtualmachine", c.VMName, "-n", c.Namespace, "--ignore-not-found")
-		if err == nil {
-			_, err = kubectl(c, "delete", "pvc", c.VMName+"-rootdisk", "-n", c.Namespace, "--ignore-not-found")
-			_, _ = kubectl(c, "delete", "pvc", c.VMName+"-image", "-n", c.Namespace, "--ignore-not-found")
-			_, _ = kubectl(c, "delete", "pvc", c.VMName+"-blankdisk", "-n", c.Namespace, "--ignore-not-found")
-		}
+		err = deleteMachine(c)
 	case "start":
 		progress("Requesting virtual machine start")
 		err = requestVMStart(c)
