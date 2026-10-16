@@ -16,7 +16,7 @@ import (
 
 const commandTimeout = 2 * time.Minute
 
-type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, ImageType, StorageClass, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData, UserDataFile, CloudInitTemplate string }
+type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, ImageType, StorageClass, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData, UserDataFile, CloudInitTemplate, Network string }
 
 func env(n, fallback string) string {
 	if v := os.Getenv(n); v != "" {
@@ -25,7 +25,28 @@ func env(n, fallback string) string {
 	return fallback
 }
 func load() config {
-	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), os.Getenv("HARVESTER_IMAGE"), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA"), os.Getenv("HARVESTER_USER_DATA_FILE"), os.Getenv("HARVESTER_CLOUD_INIT_TEMPLATE")}
+	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), os.Getenv("HARVESTER_IMAGE"), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA"), os.Getenv("HARVESTER_USER_DATA_FILE"), os.Getenv("HARVESTER_CLOUD_INIT_TEMPLATE"), os.Getenv("HARVESTER_NETWORK")}
+}
+
+func progress(message string) {
+	fmt.Fprintln(os.Stdout, "harvester: "+message)
+}
+
+func checkNetwork(c config) error {
+	if c.Network == "" {
+		return nil
+	}
+	namespace, name := c.Namespace, c.Network
+	parts := strings.Split(c.Network, "/")
+	if len(parts) == 2 {
+		namespace, name = parts[0], parts[1]
+	}
+	if len(parts) > 2 || namespace == "" || name == "" {
+		return errors.New("HARVESTER_NETWORK must be NAME or NAMESPACE/NAME")
+	}
+	progress("Checking VM network attachment")
+	_, err := kubectl(c, "get", "network-attachment-definition", name, "-n", namespace, "-o", "name", "--request-timeout=10s")
+	return err
 }
 
 type imageInfo struct{ Namespace, Name, StorageClass, Format string }
@@ -117,6 +138,9 @@ func buildVMManifest(c config, image imageInfo) (vmManifest, error) {
 	m.Spec.Template.Metadata = metadata{Labels: map[string]string{"devsy.sh/provider": "harvester"}}
 	m.Spec.Template.Spec.Domain = map[string]any{"cpu": map[string]int{"cores": cpu}, "memory": map[string]string{"guest": c.Memory}, "resources": map[string]any{"requests": map[string]string{"memory": c.Memory}, "limits": map[string]string{"memory": c.Memory}}, "devices": map[string]any{"disks": []map[string]any{{"name": "rootdisk", "disk": map[string]string{"bus": "virtio"}}}, "interfaces": []map[string]any{{"name": "default", "bridge": map[string]any{}}}}}
 	m.Spec.Template.Spec.Networks = []map[string]any{{"name": "default", "pod": map[string]any{}}}
+	if c.Network != "" {
+		m.Spec.Template.Spec.Networks = []map[string]any{{"name": "default", "multus": map[string]string{"networkName": c.Network}}}
+	}
 	m.Spec.Template.Spec.Volumes = []vmVolume{{Name: "rootdisk", PersistentVolumeClaim: &struct {
 		ClaimName string `json:"claimName"`
 	}{ClaimName: claim}}}
@@ -196,6 +220,10 @@ func kubectl(c config, args ...string) ([]byte, error) {
 	return kubectlInput(c, nil, args...)
 }
 func kubectlInput(c config, input []byte, args ...string) ([]byte, error) {
+	return kubectlInputContext(context.Background(), c, input, args...)
+}
+
+func kubectlInputContext(parent context.Context, c config, input []byte, args ...string) ([]byte, error) {
 	prefix := []string{}
 	if c.Kubeconfig != "" {
 		prefix = append(prefix, "--kubeconfig", c.Kubeconfig)
@@ -203,9 +231,10 @@ func kubectlInput(c config, input []byte, args ...string) ([]byte, error) {
 	if c.Context != "" {
 		prefix = append(prefix, "--context", c.Context)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	ctx, cancel := context.WithTimeout(parent, commandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, kubectlPath(), append(prefix, args...)...)
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = bytes.NewReader(input)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -270,6 +299,7 @@ func applyJSON(c config, object any) error {
 	return cmd.Run()
 }
 func apply(c config) error {
+	progress("Resolving cloud-init configuration")
 	userData, err := resolveUserData(c)
 	if err != nil {
 		return err
@@ -278,6 +308,10 @@ func apply(c config) error {
 	if err := validateConfig(c, "create"); err != nil {
 		return err
 	}
+	if err := checkNetwork(c); err != nil {
+		return err
+	}
+	progress("Resolving VM image")
 	image, err := resolveImage(c)
 	if err != nil {
 		return err
@@ -286,6 +320,7 @@ func apply(c config) error {
 	if err != nil {
 		return err
 	}
+	progress("Provisioning root disk")
 	if err = applyJSON(c, pvc); err != nil {
 		return err
 	}
@@ -297,6 +332,7 @@ func apply(c config) error {
 			return err
 		}
 	}
+	progress("Creating virtual machine")
 	vm, err := buildVMManifest(c, image)
 	if err != nil {
 		return err
@@ -307,20 +343,54 @@ func apply(c config) error {
 	if err = waitForVM(c, "Running"); err != nil {
 		return err
 	}
-	return waitForGuest(c)
+	if err = waitForGuest(c); err != nil {
+		return err
+	}
+	progress("Machine ready")
+	return nil
 }
 func waitForGuest(c config) error {
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
-		host, err := sshHost(c)
+	progress("Waiting for guest IP, SSH and Docker readiness")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	var lastErr error
+	ipReported := false
+	for ctx.Err() == nil {
+		host, err := sshHostContext(ctx, c)
 		if err == nil {
-			if err = sshRun(c, host, "command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1"); err == nil {
+			if !ipReported {
+				progress("Guest IP available; checking SSH and Docker")
+				ipReported = true
+			}
+			probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
+			err = probeGuest(probeCtx, c, host)
+			probeCancel()
+			if err == nil {
+				progress("SSH and Docker are ready")
 				return nil
 			}
 		}
-		time.Sleep(2 * time.Second)
+		lastErr = err
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
 	}
-	return errors.New("timed out waiting for SSH and Docker readiness")
+	return fmt.Errorf("timed out waiting for SSH and Docker readiness; check that the VM network is reachable from this client and cloud-init installed Docker: %w", lastErr)
+}
+
+func probeGuest(ctx context.Context, c config, host string) error {
+	command := sshExecCommand(c, host, "command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1")
+	cmd := exec.CommandContext(ctx, command.Path, command.Args[1:]...)
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("SSH/Docker probe: %w", ctx.Err())
+	}
+	if err != nil {
+		return fmt.Errorf("SSH/Docker probe: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 func readVMStatus(c config) (*vmStatus, error) {
 	out, err := kubectl(c, "get", "virtualmachine", c.VMName, "-n", c.Namespace, "-o", "json")
@@ -339,28 +409,42 @@ func readVMStatus(c config) (*vmStatus, error) {
 	return &vmStatus{Ready: p.Status.Ready, Phase: p.Status.PrintableStatus}, nil
 }
 func waitForVM(c config, desired string) error {
+	progress("Waiting for virtual machine to become " + desired)
 	deadline := time.Now().Add(90 * time.Second)
+	lastState := ""
 	for time.Now().Before(deadline) {
 		status, err := readVMStatus(c)
-		if err == nil && statusForVM(status, false) == desired {
-			return nil
+		if err == nil {
+			state := statusForVM(status, false)
+			if status.Phase != lastState {
+				progress("Virtual machine state: " + status.Phase)
+				lastState = status.Phase
+			}
+			if state == desired {
+				return nil
+			}
 		}
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("timed out waiting for VM %s to become %s", c.VMName, desired)
 }
 func sshHost(c config) (string, error) {
+	return sshHostContext(context.Background(), c)
+}
+
+func sshHostContext(ctx context.Context, c config) (string, error) {
 	if c.SSHHost != "" {
 		return c.SSHHost, nil
 	}
-	out, err := kubectl(c, "get", "vmi", c.VMName, "-n", c.Namespace, "-o", "json")
+	out, err := kubectlInputContext(ctx, c, nil, "get", "vmi", c.VMName, "-n", c.Namespace, "-o", "json")
 	if err != nil {
 		return "", err
 	}
 	var p struct {
 		Status struct {
 			Interfaces []struct {
-				IP string `json:"ip"`
+				Name string `json:"name"`
+				IP   string `json:"ipAddress"`
 			} `json:"interfaces"`
 		} `json:"status"`
 	}
@@ -368,11 +452,11 @@ func sshHost(c config) (string, error) {
 		return "", err
 	}
 	for _, i := range p.Status.Interfaces {
-		if i.IP != "" {
+		if i.Name == "default" && i.IP != "" {
 			return i.IP, nil
 		}
 	}
-	return "", errors.New("VM has no network IP yet")
+	return "", errors.New("VM has no IP address on its default network yet")
 }
 func sshCommand(c config, command string) error {
 	host, err := sshHost(c)
@@ -405,13 +489,22 @@ func main() {
 	var err error
 	switch op {
 	case "init":
+		progress("Resolving cloud-init configuration")
 		_, err = resolveUserData(c)
 		if err == nil {
+			err = checkNetwork(c)
+		}
+		if err == nil {
+			progress("Checking Harvester API connectivity")
 			_, err = kubectl(c, "version", "--request-timeout=10s")
+		}
+		if err == nil {
+			progress("Provider initialized")
 		}
 	case "create":
 		err = apply(c)
 	case "delete":
+		progress("Deleting virtual machine and its disks")
 		_, err = kubectl(c, "delete", "virtualmachine", c.VMName, "-n", c.Namespace, "--ignore-not-found")
 		if err == nil {
 			_, err = kubectl(c, "delete", "pvc", c.VMName+"-rootdisk", "-n", c.Namespace, "--ignore-not-found")
@@ -419,11 +512,13 @@ func main() {
 			_, _ = kubectl(c, "delete", "pvc", c.VMName+"-blankdisk", "-n", c.Namespace, "--ignore-not-found")
 		}
 	case "start":
+		progress("Requesting virtual machine start")
 		err = requestVMStart(c)
 		if err == nil {
 			err = waitForVM(c, "Running")
 		}
 	case "stop":
+		progress("Requesting virtual machine shutdown")
 		_, err = kubectl(c, "patch", "virtualmachine", c.VMName, "-n", c.Namespace, "--type=merge", "-p", `{"spec":{"runStrategy":"Halted"}}`)
 		if err == nil {
 			err = waitForVM(c, "Stopped")

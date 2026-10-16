@@ -13,7 +13,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.9 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.10 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -78,14 +78,42 @@ complete `HARVESTER_USER_DATA=...` value in CSV quotes (double embedded quotes),
 including all newlines, rather than passing unquoted multiline text. Workspace
 `up --provider-option` uses an array flag and does not need this CSV layer.
 
-The default VM uses the pod network. Your client must route to its IP, or use a
-scoped SSH proxy. For example, an executable wrapper around
+Set `HARVESTER_NETWORK` to an existing Harvester network attachment reachable
+from your Devsy client, for example:
+
+```sh
+devsy provider set harvester -o HARVESTER_NETWORK=default/mgmt-untagged
+```
+
+This selects the VM's network when creating it; it does not reconfigure existing
+VMs. A bare attachment name uses `HARVESTER_NAMESPACE`. The attachment is checked
+during init and before disk/VM creation. Guest IP discovery uses KubeVirt's
+`ipAddress` on the provider's `default` interface, ignoring guest Docker bridges.
+
+Without this option, the VM uses the pod network. Your client must route to its
+IP, or use a scoped SSH proxy. For example, an executable wrapper around
 `virtctl --kubeconfig ... --context ... port-forward --stdio=true vm/NAME/NAMESPACE 22`
 can be supplied with `HARVESTER_SSH_HOST=127.0.0.1` and
 `HARVESTER_SSH_FLAGS=-o ProxyCommand=/absolute/path/to/wrapper`. This uses the
 authenticated Kubernetes API without exposing a node port or changing cluster
 network policy. SSH flags currently accept simple whitespace-separated tokens;
 put commands containing spaces in a wrapper.
+
+### Launch progress and readiness
+
+The provider writes `harvester:` progress messages to Devsy's existing launch
+logs during initialization, image lookup, disk provisioning, VM boot, and guest
+readiness. VM state is logged when it changes. A running VM still needs a
+reachable guest IP, working SSH credentials, and Docker before its workspace can
+start. Each SSH/Docker readiness probe is bounded to ten seconds within the
+existing ninety-second guest-readiness wait; timeout errors retain the last
+failed check. Long-lived workspace SSH transports have no added deadline.
+
+These messages populate the log pane. Devsy currently wraps external machine
+provider output as logs, so this provider-only integration cannot add structured
+Launch activity timeline steps. Status responses and SSH command output remain
+free of progress messages; cloud-init content and credentials are not logged by
+the progress reporter.
 
 ## Status
 
