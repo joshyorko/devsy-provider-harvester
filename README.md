@@ -13,7 +13,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.11 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.12 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -98,6 +98,28 @@ can be supplied with `HARVESTER_SSH_HOST=127.0.0.1` and
 authenticated Kubernetes API without exposing a node port or changing cluster
 network policy. SSH flags currently accept simple whitespace-separated tokens;
 put commands containing spaces in a wrapper.
+
+### Reusing an existing machine
+
+`create` first checks for an existing VM with the requested machine name. It
+reuses the VM only when both `devsy.sh/provider=harvester` and
+`devsy.sh/machine-id=NAME` labels match. Reattachment leaves the VM and PVC
+definitions untouched, preserving Harvester's assigned MAC address and adjusted
+memory request. Image, CPU, memory, disk, network and cloud-init options apply
+when provisioning a new VM; changing them does not resize or reconfigure an
+existing one. Creation-only image and cloud-init sources need not remain
+available for reattachment. SSH credentials and Docker readiness are still
+checked. A stopped VM is started through KubeVirt's start subresource.
+
+An existing VM without matching ownership labels, a VM being deleted, or a
+failed lookup causes an error before provisioning. New VM creation uses an
+atomic create operation: if another VM appears after the initial lookup, the
+command fails instead of overwriting it; retry to check whether it can be reused.
+Disk claims are also created atomically. A retry after partial provisioning can
+reuse a claim only when its provider/machine labels, image, storage class, size
+and mode match; the claim is never rewritten. A legacy unlabeled orphan claim
+without a VM must be inspected and recovered separately. This does not change
+Devsy's cleanup of interrupted workspace creation.
 
 ### Launch progress and readiness
 

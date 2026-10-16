@@ -63,10 +63,11 @@ func parseImageReference(ref, defaultNamespace string) (imageInfo, error) {
 }
 
 type metadata struct {
-	Name        string            `json:"name"`
-	Namespace   string            `json:"namespace"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Annotations map[string]string `json:"annotations,omitempty"`
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Annotations       map[string]string `json:"annotations,omitempty"`
+	DeletionTimestamp string            `json:"deletionTimestamp,omitempty"`
 }
 type vmVolume struct {
 	Name                  string `json:"name"`
@@ -173,7 +174,7 @@ func buildPVCManifest(c config, image imageInfo) (pvcManifest, error) {
 	if image.Format == "iso" {
 		claim = c.VMName + "-image"
 	}
-	pvc := pvcManifest{APIVersion: "v1", Kind: "PersistentVolumeClaim", Metadata: metadata{Name: claim, Namespace: c.Namespace, Annotations: annotations}, Spec: map[string]any{"accessModes": []string{"ReadWriteMany"}, "resources": map[string]any{"requests": map[string]string{"storage": c.Disk}}, "storageClassName": image.StorageClass, "volumeMode": "Block"}}
+	pvc := pvcManifest{APIVersion: "v1", Kind: "PersistentVolumeClaim", Metadata: metadata{Name: claim, Namespace: c.Namespace, Annotations: annotations, Labels: map[string]string{"devsy.sh/provider": "harvester", "devsy.sh/machine-id": c.VMName}}, Spec: map[string]any{"accessModes": []string{"ReadWriteMany"}, "resources": map[string]any{"requests": map[string]string{"storage": c.Disk}}, "storageClassName": image.StorageClass, "volumeMode": "Block"}}
 	if image.Format == "iso" {
 		pvc.Spec["storageClassName"] = image.StorageClass
 		return pvc, nil
@@ -181,7 +182,7 @@ func buildPVCManifest(c config, image imageInfo) (pvcManifest, error) {
 	return pvc, nil
 }
 func buildBlankPVCManifest(c config, image imageInfo) pvcManifest {
-	return pvcManifest{APIVersion: "v1", Kind: "PersistentVolumeClaim", Metadata: metadata{Name: c.VMName + "-blankdisk", Namespace: c.Namespace}, Spec: map[string]any{"accessModes": []string{"ReadWriteMany"}, "resources": map[string]any{"requests": map[string]string{"storage": c.Disk}}, "storageClassName": c.StorageClass, "volumeMode": "Block"}}
+	return pvcManifest{APIVersion: "v1", Kind: "PersistentVolumeClaim", Metadata: metadata{Name: c.VMName + "-blankdisk", Namespace: c.Namespace, Labels: map[string]string{"devsy.sh/provider": "harvester", "devsy.sh/machine-id": c.VMName}}, Spec: map[string]any{"accessModes": []string{"ReadWriteMany"}, "resources": map[string]any{"requests": map[string]string{"storage": c.Disk}}, "storageClassName": c.StorageClass, "volumeMode": "Block"}}
 }
 func statusForVM(s *vmStatus, notFound bool) string {
 	if notFound || s == nil {
@@ -278,7 +279,7 @@ func resolveImage(c config) (imageInfo, error) {
 	}
 	return image, nil
 }
-func applyJSON(c config, object any) error {
+func createJSON(c config, object any) error {
 	payload, err := json.Marshal(object)
 	if err != nil {
 		return err
@@ -290,7 +291,7 @@ func applyJSON(c config, object any) error {
 	if c.Context != "" {
 		args = append(args, "--context", c.Context)
 	}
-	args = append(args, "apply", "-f", "-")
+	args = append(args, "create", "-f", "-")
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, kubectlPath(), args...)
@@ -299,6 +300,93 @@ func applyJSON(c config, object any) error {
 	return cmd.Run()
 }
 func apply(c config) error {
+	reused, err := reuseExistingVM(c)
+	if err != nil {
+		return err
+	}
+	if !reused {
+		if err := provisionVM(c); err != nil {
+			return err
+		}
+	}
+	if err := waitForVM(c, "Running"); err != nil {
+		return err
+	}
+	if err := waitForGuest(c); err != nil {
+		return err
+	}
+	progress("Machine ready")
+	return nil
+}
+
+func reuseExistingVM(c config) (bool, error) {
+	out, err := kubectl(c, "get", "virtualmachine", c.VMName, "-n", c.Namespace, "-o", "json", "--ignore-not-found")
+	if err != nil {
+		return false, err
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return false, nil
+	}
+	var vm struct {
+		Metadata metadata `json:"metadata"`
+		Status   struct {
+			Phase string `json:"printableStatus"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(out, &vm); err != nil {
+		return false, fmt.Errorf("decode existing VM %s: %w", c.VMName, err)
+	}
+	if vm.Metadata.Labels["devsy.sh/provider"] != "harvester" || vm.Metadata.Labels["devsy.sh/machine-id"] != c.VMName {
+		return false, fmt.Errorf("existing VM %s is not owned by this Harvester machine; refusing to reuse or overwrite it", c.VMName)
+	}
+	if vm.Metadata.DeletionTimestamp != "" {
+		return false, fmt.Errorf("VM %s is deleting; wait for deletion to finish before retrying", c.VMName)
+	}
+	progress("Reusing existing virtual machine without changing its VM or disk definitions")
+	if strings.EqualFold(vm.Status.Phase, "Stopped") || strings.EqualFold(vm.Status.Phase, "Halted") {
+		progress("Requesting existing virtual machine start")
+		if err := requestVMStart(c); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func ensurePVC(c config, pvc pvcManifest) error {
+	out, err := kubectl(c, "get", "pvc", pvc.Metadata.Name, "-n", c.Namespace, "-o", "json", "--ignore-not-found")
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return createJSON(c, pvc)
+	}
+	var existing struct {
+		Metadata metadata `json:"metadata"`
+		Spec     struct {
+			StorageClassName string   `json:"storageClassName"`
+			VolumeMode       string   `json:"volumeMode"`
+			AccessModes      []string `json:"accessModes"`
+			Resources        struct {
+				Requests map[string]string `json:"requests"`
+			} `json:"resources"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(out, &existing); err != nil {
+		return fmt.Errorf("decode existing disk claim %s: %w", pvc.Metadata.Name, err)
+	}
+	if existing.Metadata.Labels["devsy.sh/provider"] != "harvester" || existing.Metadata.Labels["devsy.sh/machine-id"] != c.VMName || existing.Metadata.DeletionTimestamp != "" {
+		return fmt.Errorf("disk claim %s is not reusable: ownership labels must match and deletion must not be in progress", pvc.Metadata.Name)
+	}
+	if existing.Metadata.Annotations["harvesterhci.io/imageId"] != pvc.Metadata.Annotations["harvesterhci.io/imageId"] ||
+		existing.Spec.StorageClassName != pvc.Spec["storageClassName"] || existing.Spec.VolumeMode != "Block" ||
+		len(existing.Spec.AccessModes) != 1 || existing.Spec.AccessModes[0] != "ReadWriteMany" || existing.Spec.Resources.Requests["storage"] != c.Disk {
+		return fmt.Errorf("disk claim %s does not match the requested image, storage class, size or mode; refusing to modify it", pvc.Metadata.Name)
+	}
+	progress("Reusing existing disk claim " + pvc.Metadata.Name + " without changing its definition")
+	return nil
+}
+
+func provisionVM(c config) error {
 	progress("Resolving cloud-init configuration")
 	userData, err := resolveUserData(c)
 	if err != nil {
@@ -321,14 +409,14 @@ func apply(c config) error {
 		return err
 	}
 	progress("Provisioning root disk")
-	if err = applyJSON(c, pvc); err != nil {
+	if err = ensurePVC(c, pvc); err != nil {
 		return err
 	}
 	if image.Format == "iso" {
 		if c.StorageClass == "" {
 			return errors.New("HARVESTER_STORAGE_CLASS is required for ISO images")
 		}
-		if err = applyJSON(c, buildBlankPVCManifest(c, image)); err != nil {
+		if err = ensurePVC(c, buildBlankPVCManifest(c, image)); err != nil {
 			return err
 		}
 	}
@@ -337,17 +425,8 @@ func apply(c config) error {
 	if err != nil {
 		return err
 	}
-	if err = applyJSON(c, vm); err != nil {
-		return err
-	}
-	if err = waitForVM(c, "Running"); err != nil {
-		return err
-	}
-	if err = waitForGuest(c); err != nil {
-		return err
-	}
-	progress("Machine ready")
-	return nil
+	// An intervening create must fail rather than overwrite another VM's spec.
+	return createJSON(c, vm)
 }
 func waitForGuest(c config) error {
 	progress("Waiting for guest IP, SSH and Docker readiness")

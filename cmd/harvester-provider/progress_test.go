@@ -24,6 +24,14 @@ func init() {
 	switch name {
 	case "fake-kubectl":
 		args := strings.Join(os.Args[1:], " ")
+		if file := os.Getenv("HARVESTER_TEST_KUBECTL_CALLS"); file != "" {
+			f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+			if err != nil {
+				os.Exit(2)
+			}
+			json.NewEncoder(f).Encode(os.Args[1:])
+			f.Close()
+		}
 		switch {
 		case strings.HasPrefix(args, "delete "):
 			if file := os.Getenv("HARVESTER_TEST_DELETE_CALLS"); file != "" {
@@ -47,23 +55,65 @@ func init() {
 			}
 			io.WriteString(os.Stdout, `{"status":{"storageClassName":"test-image-storage"}}`)
 		case strings.Contains(args, "get virtualmachine "):
+			if strings.Contains(args, "--ignore-not-found") {
+				if failure := os.Getenv("HARVESTER_TEST_VM_LOOKUP_FAILURE"); failure != "" {
+					os.Stderr.WriteString(failure)
+					os.Exit(1)
+				}
+				if file := os.Getenv("HARVESTER_TEST_EXISTING_VM"); file != "" && os.Getenv("HARVESTER_TEST_VM_LOOKUP_EMPTY") != "1" {
+					data, err := os.ReadFile(file)
+					if err != nil {
+						os.Exit(2)
+					}
+					os.Stdout.Write(data)
+				}
+				break
+			}
 			json.NewEncoder(os.Stdout).Encode(map[string]any{"status": map[string]string{"printableStatus": env("HARVESTER_TEST_VM_PHASE", "Running")}})
 		case strings.Contains(args, "get vmi "):
 			if os.Getenv("HARVESTER_TEST_DISCOVERY_STALL") == "1" {
 				time.Sleep(time.Minute)
 			}
 			io.WriteString(os.Stdout, `{"status":{"interfaces":[{"interfaceName":"docker0","ipAddress":"172.17.0.1"},{"name":"default","ipAddress":"192.0.2.10"}]}}`)
+		case strings.Contains(args, "get pvc "):
+			if file := os.Getenv("HARVESTER_TEST_EXISTING_PVC"); file != "" && os.Getenv("HARVESTER_TEST_PVC_LOOKUP_EMPTY") != "1" {
+				data, err := os.ReadFile(file)
+				if err != nil {
+					os.Exit(2)
+				}
+				os.Stdout.Write(data)
+			}
 		case strings.Contains(args, "get network-attachment-definition"):
 			if os.Getenv("HARVESTER_TEST_NETWORK_FAILURE") == "1" {
 				os.Stderr.WriteString("network attachment not found")
 				os.Exit(1)
 			}
-		case strings.Contains(args, "apply -f -"):
+		case strings.Contains(args, "apply -f -"), strings.Contains(args, "create -f -"):
 			var object map[string]any
 			if err := json.NewDecoder(os.Stdin).Decode(&object); err != nil {
 				os.Exit(2)
 			}
 			fmtKind, _ := object["kind"].(string)
+			if file := os.Getenv("HARVESTER_TEST_EXISTING_PVC"); file != "" && fmtKind == "PersistentVolumeClaim" {
+				if strings.Contains(args, "create -f -") {
+					os.Stderr.WriteString("Error from server (AlreadyExists): persistentvolumeclaim already exists")
+					os.Exit(1)
+				}
+				data, _ := json.Marshal(object)
+				if err := os.WriteFile(file, data, 0600); err != nil {
+					os.Exit(2)
+				}
+			}
+			if file := os.Getenv("HARVESTER_TEST_EXISTING_VM"); file != "" && fmtKind == "VirtualMachine" {
+				if strings.Contains(args, "create -f -") {
+					os.Stderr.WriteString("Error from server (AlreadyExists): virtualmachine already exists")
+					os.Exit(1)
+				}
+				data, _ := json.Marshal(object)
+				if err := os.WriteFile(file, data, 0600); err != nil {
+					os.Exit(2)
+				}
+			}
 			io.WriteString(os.Stdout, fmtKind+" applied\n")
 		}
 	case "ssh":
