@@ -78,7 +78,7 @@ func TestBuildVMManifestUsesHarvesterImagePVCAndRunStrategy(t *testing.T) {
 	}
 }
 
-func TestBuildVMManifestSetsGuestMemory(t *testing.T) {
+func TestBuildVMManifestSetsHarvesterMemoryFields(t *testing.T) {
 	for _, memory := range []string{"2Gi", "8Gi", "512Mi"} {
 		c := config{Namespace: "default", VMName: "machine-1", CPU: "2", Memory: memory, Disk: "12Gi"}
 		manifest, err := buildVMManifest(c, imageInfo{Format: "qcow2"})
@@ -88,6 +88,11 @@ func TestBuildVMManifestSetsGuestMemory(t *testing.T) {
 		guest, ok := manifest.Spec.Template.Spec.Domain["memory"].(map[string]string)
 		if !ok || guest["guest"] != memory {
 			t.Fatalf("Harvester admission requires domain.memory.guest=%q, got %#v", memory, manifest.Spec.Template.Spec.Domain["memory"])
+		}
+		resources := manifest.Spec.Template.Spec.Domain["resources"].(map[string]any)
+		limits, ok := resources["limits"].(map[string]string)
+		if !ok || limits["memory"] != memory {
+			t.Fatalf("Harvester's VM list requires domain.resources.limits.memory=%q, got %#v", memory, resources["limits"])
 		}
 	}
 }
