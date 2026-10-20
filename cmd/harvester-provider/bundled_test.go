@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -94,12 +95,24 @@ func TestBundledSchemaFixture(t *testing.T) {
 	}
 }
 
-func TestBundledProbeDoesNotExposeGuestOutput(t *testing.T) {
-	lifecycleFixture(t)
-	t.Setenv("HARVESTER_TEST_SSH_ERROR_OUTPUT", "Host key verification failed SECRET_BOOTSTRAP_LOG")
-	err := probeGuest(context.Background(), config{SSHPort: "22", SSHUser: "ubuntu", CloudInitProfile: "ubuntu-24.04-docker-v1"}, "192.0.2.10")
-	if err == nil || strings.Contains(err.Error(), "SECRET_BOOTSTRAP_LOG") {
-		t.Fatal("probe leaked guest output")
+func TestGuestProbeDiagnosticScope(t *testing.T) {
+	for _, profile := range []string{"", "ubuntu-24.04-docker-v1"} {
+		for _, diagnostic := range []string{"Host key verification failed SECRET_BOOTSTRAP_LOG", "Permission denied SECRET_BOOTSTRAP_LOG"} {
+			t.Run(profile+"/"+strings.Fields(diagnostic)[0], func(t *testing.T) {
+				lifecycleFixture(t)
+				t.Setenv("HARVESTER_TEST_SSH_ERROR_OUTPUT", diagnostic)
+				err := probeGuest(context.Background(), config{SSHPort: "22", SSHUser: "ubuntu", CloudInitProfile: profile}, "192.0.2.10")
+				if err == nil {
+					t.Fatal("probe error missing")
+				}
+				if got, want := strings.Contains(err.Error(), diagnostic), profile == ""; got != want {
+					t.Fatal("guest diagnostic visibility differs from source mode")
+				}
+				if got, want := errors.Is(err, errHostKeyVerification), strings.HasPrefix(diagnostic, "Host key"); got != want {
+					t.Fatal("host-key failure classification lost")
+				}
+			})
+		}
 	}
 }
 

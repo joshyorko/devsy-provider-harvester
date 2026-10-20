@@ -458,9 +458,15 @@ func probeGuest(ctx context.Context, c config, host string) error {
 	}
 	if err != nil {
 		if strings.Contains(string(out), "REMOTE HOST IDENTIFICATION HAS CHANGED") || strings.Contains(string(out), "Host key verification failed") {
-			return errHostKeyVerification
+			if c.CloudInitProfile != "" {
+				return errHostKeyVerification
+			}
+			return fmt.Errorf("%w: %s", errHostKeyVerification, strings.TrimSpace(string(out)))
 		}
-		return fmt.Errorf("SSH/Docker probe failed; inspect guest cloud-init status and /var/log/cloud-init-output.log: %w", err)
+		if c.CloudInitProfile != "" {
+			return fmt.Errorf("SSH/Docker probe failed; inspect guest cloud-init status and /var/log/cloud-init-output.log: %w", err)
+		}
+		return fmt.Errorf("SSH/Docker probe: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

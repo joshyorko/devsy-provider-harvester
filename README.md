@@ -228,8 +228,9 @@ readiness. VM state is logged when it changes. A running VM still needs a
 reachable guest IP, working SSH credentials, and Docker before its workspace can
 start. Each SSH/Docker readiness probe is bounded to ten seconds within the
 ninety-second guest-readiness wait, or fifteen minutes with the bundled profile; timeout errors retain the last
-failed check. Readiness errors redact guest SSH output for every source mode;
-inspect guest logs directly for bootstrap details. Host-key verification remains
+failed check. Bundled-profile readiness errors redact guest SSH output; inspect
+guest logs directly for bootstrap details. Custom sources retain their SSH
+diagnostics. Host-key verification remains
 a distinct immediate failure. Long-lived workspace SSH transports have no added deadline.
 
 These messages populate the log pane. Devsy currently wraps external machine
