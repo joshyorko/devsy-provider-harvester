@@ -1,7 +1,7 @@
 # Provider configuration reference
 
 This reference describes the options in [provider.yaml](../provider.yaml) for
-`v0.1.14`. Options are saved on the client running Devsy. Paths refer to that
+`v0.1.15`. Options are saved on the client running Devsy. Paths refer to that
 client, including when Devsy runs on Windows or inside a container.
 
 ## Cluster access
@@ -20,7 +20,8 @@ an existing VM or disk claim. See [existing-machine behavior](../README.md#reusi
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `HARVESTER_IMAGE` | Required | Existing Harvester image name, or `NAMESPACE/NAME`. |
+| `HARVESTER_IMAGE` | Unset | Manual resource name, exact `NAMESPACE/NAME`, or unique display name. Used when no catalog selection is saved; an image is required before new VM creation. |
+| `HARVESTER_IMAGE_CHOICE` | Use manual image setting | Dynamic Desktop selector with readable image labels. Available after initialization on Devsy v1.24+. Saves an exact reference and overrides manual image input. |
 | `HARVESTER_IMAGE_NAMESPACE` | `harvester-public` | Namespace used for a bare image name. |
 | `HARVESTER_IMAGE_TYPE` | `raw` | Image attachment type: `raw`, `qcow2`, or `iso`. |
 | `HARVESTER_STORAGE_CLASS` | Unset | Required for the separate writable root disk when the image type is `iso`. Other image types use the image's resolved storage class. |
@@ -28,6 +29,12 @@ an existing VM or disk claim. See [existing-machine behavior](../README.md#reusi
 | `HARVESTER_MEMORY` | `8Gi` | VM memory request. |
 | `HARVESTER_DISK` | `40Gi` | Root disk size. |
 | `HARVESTER_NETWORK` | Pod network | Existing Harvester network attachment, `NAMESPACE/NAME` or a name in `HARVESTER_NAMESPACE`. The Devsy client must be able to reach the guest. |
+
+`HARVESTER_IMAGE_CATALOG` and `HARVESTER_IMAGE_PIN` are hidden, provider-managed
+state for catalog refresh and durable selection. Do not configure them manually.
+The image-list permission is only needed for the picker and display-name lookup;
+exact references still work with image-GET-only access. See
+[image selection](../README.md#image-selection) for first-run setup and refresh.
 
 ## Guest bootstrap
 
