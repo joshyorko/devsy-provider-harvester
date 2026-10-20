@@ -18,7 +18,9 @@ const commandTimeout = 2 * time.Minute
 
 var errHostKeyVerification = errors.New("SSH host key verification failed; verify the VM's host key before updating its known_hosts entry")
 
-type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, ImageType, StorageClass, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData, UserDataFile, CloudInitTemplate, Network string }
+var errBundledBootstrap = errors.New("bundled cloud-init failed; verify this is an Ubuntu 24.04 cloud image and inspect cloud-init status and /var/log/cloud-init-output.log in the guest")
+
+type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, ImageType, StorageClass, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData, UserDataFile, CloudInitTemplate, Network, CloudInitProfile string }
 
 func env(n, fallback string) string {
 	if v := os.Getenv(n); v != "" {
@@ -27,7 +29,7 @@ func env(n, fallback string) string {
 	return fallback
 }
 func load() config {
-	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), configuredImage(), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA"), os.Getenv("HARVESTER_USER_DATA_FILE"), os.Getenv("HARVESTER_CLOUD_INIT_TEMPLATE"), os.Getenv("HARVESTER_NETWORK")}
+	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), configuredImage(), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA"), os.Getenv("HARVESTER_USER_DATA_FILE"), os.Getenv("HARVESTER_CLOUD_INIT_TEMPLATE"), os.Getenv("HARVESTER_NETWORK"), os.Getenv("HARVESTER_CLOUD_INIT_PROFILE")}
 }
 
 func progress(message string) {
@@ -137,6 +139,9 @@ func buildVMManifest(c config, image imageInfo) (vmManifest, error) {
 	m.APIVersion = "kubevirt.io/v1"
 	m.Kind = "VirtualMachine"
 	m.Metadata = metadata{Name: c.VMName, Namespace: c.Namespace, Labels: map[string]string{"devsy.sh/provider": "harvester", "devsy.sh/machine-id": c.VMName}}
+	if c.CloudInitProfile != "" {
+		m.Metadata.Annotations = map[string]string{"devsy.sh/cloud-init-profile": c.CloudInitProfile}
+	}
 	m.Spec.RunStrategy = "RerunOnFailure"
 	m.Spec.Template.Metadata = metadata{Labels: map[string]string{"devsy.sh/provider": "harvester"}}
 	m.Spec.Template.Spec.Domain = map[string]any{"cpu": map[string]int{"cores": cpu}, "memory": map[string]string{"guest": c.Memory}, "resources": map[string]any{"requests": map[string]string{"memory": c.Memory}, "limits": map[string]string{"memory": c.Memory}}, "devices": map[string]any{"disks": []map[string]any{{"name": "rootdisk", "disk": map[string]string{"bus": "virtio"}}}, "interfaces": []map[string]any{{"name": "default", "bridge": map[string]any{}}}}}
@@ -162,7 +167,15 @@ func buildVMManifest(c config, image imageInfo) (vmManifest, error) {
 		userData = "#cloud-config\nusers:\n  - name: " + c.SSHUser + "\n    sudo: ALL=(ALL) NOPASSWD:ALL\n    shell: /bin/bash\n    ssh_authorized_keys:\n      - " + c.SSHPublicKey + "\n"
 	}
 	if userData != "" {
-		m.Spec.Template.Spec.Volumes = append(m.Spec.Template.Spec.Volumes, vmVolume{Name: "cloudinit", CloudInitNoCloud: map[string]string{"userData": userData}})
+		cloudInitData := map[string]string{"userData": userData}
+		if c.CloudInitProfile != "" {
+			encoded, err := compressedUserData(userData)
+			if err != nil {
+				return vmManifest{}, err
+			}
+			cloudInitData = map[string]string{"userDataBase64": encoded}
+		}
+		m.Spec.Template.Spec.Volumes = append(m.Spec.Template.Spec.Volumes, vmVolume{Name: "cloudinit", CloudInitNoCloud: cloudInitData})
 		m.Spec.Template.Spec.Domain["devices"].(map[string]any)["disks"] = append(m.Spec.Template.Spec.Domain["devices"].(map[string]any)["disks"].([]map[string]any), map[string]any{"name": "cloudinit", "disk": map[string]string{"bus": "virtio"}})
 	}
 	return m, nil
@@ -271,7 +284,7 @@ func createJSON(c config, object any) error {
 	return cmd.Run()
 }
 func apply(c config) error {
-	reused, err := reuseExistingVM(c)
+	reused, err := reuseExistingVM(&c)
 	if err != nil {
 		return err
 	}
@@ -290,8 +303,8 @@ func apply(c config) error {
 	return nil
 }
 
-func reuseExistingVM(c config) (bool, error) {
-	out, err := kubectl(c, "get", "virtualmachine", c.VMName, "-n", c.Namespace, "-o", "json", "--ignore-not-found")
+func reuseExistingVM(c *config) (bool, error) {
+	out, err := kubectl(*c, "get", "virtualmachine", c.VMName, "-n", c.Namespace, "-o", "json", "--ignore-not-found")
 	if err != nil {
 		return false, err
 	}
@@ -313,10 +326,16 @@ func reuseExistingVM(c config) (bool, error) {
 	if vm.Metadata.DeletionTimestamp != "" {
 		return false, fmt.Errorf("VM %s is deleting; wait for deletion to finish before retrying", c.VMName)
 	}
+	// Bootstrap options apply only at creation. Reattachment follows the VM's
+	// original profile even if the saved provider configuration has changed.
+	c.CloudInitProfile = vm.Metadata.Annotations["devsy.sh/cloud-init-profile"]
+	if c.CloudInitProfile != "" && c.CloudInitProfile != "ubuntu-24.04-docker-v1" {
+		return false, errors.New("existing VM has an unsupported cloud-init profile; use the provider version that created it")
+	}
 	progress("Reusing existing virtual machine without changing its VM or disk definitions")
 	if strings.EqualFold(vm.Status.Phase, "Stopped") || strings.EqualFold(vm.Status.Phase, "Halted") {
 		progress("Requesting existing virtual machine start")
-		if err := requestVMStart(c); err != nil {
+		if err := requestVMStart(*c); err != nil {
 			return false, err
 		}
 	}
@@ -375,6 +394,9 @@ func provisionVM(c config) error {
 	if err != nil {
 		return err
 	}
+	if c.CloudInitProfile != "" && image.Format == "iso" {
+		return errors.New("bundled profile requires an Ubuntu 24.04 cloud image, not an ISO; select an installed cloud image")
+	}
 	pvc, err := buildPVCManifest(c, image)
 	if err != nil {
 		return err
@@ -401,7 +423,7 @@ func provisionVM(c config) error {
 }
 func waitForGuest(c config) error {
 	progress("Waiting for guest IP, SSH and Docker readiness")
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), guestReadyTimeout(c))
 	defer cancel()
 	var lastErr error
 	ipReported := false
@@ -419,7 +441,7 @@ func waitForGuest(c config) error {
 				progress("SSH and Docker are ready")
 				return nil
 			}
-			if errors.Is(err, errHostKeyVerification) {
+			if errors.Is(err, errHostKeyVerification) || errors.Is(err, errBundledBootstrap) {
 				return err
 			}
 		}
@@ -437,7 +459,13 @@ func probeGuest(ctx context.Context, c config, host string) error {
 	if err != nil {
 		return err
 	}
-	command := sshExecCommand(c, host, alias, "command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1")
+	probe := "command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1"
+	if c.CloudInitProfile != "" {
+		// A terminal bootstrap error must be visible even when Docker was never
+		// installed. Use only a reserved exit code, never guest log contents.
+		probe = "cloud-init status --wait >/dev/null 2>&1 || exit 42; " + probe + " && systemctl is-active --quiet qemu-guest-agent && docker compose version >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1"
+	}
+	command := sshExecCommand(c, host, alias, probe)
 	cmd := exec.CommandContext(ctx, command.Path, command.Args[1:]...)
 	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
@@ -445,8 +473,18 @@ func probeGuest(ctx context.Context, c config, host string) error {
 		return fmt.Errorf("SSH/Docker probe: %w", ctx.Err())
 	}
 	if err != nil {
+		var exit *exec.ExitError
+		if c.CloudInitProfile != "" && errors.As(err, &exit) && exit.ExitCode() == 42 {
+			return errBundledBootstrap
+		}
 		if strings.Contains(string(out), "REMOTE HOST IDENTIFICATION HAS CHANGED") || strings.Contains(string(out), "Host key verification failed") {
+			if c.CloudInitProfile != "" {
+				return errHostKeyVerification
+			}
 			return fmt.Errorf("%w: %s", errHostKeyVerification, strings.TrimSpace(string(out)))
+		}
+		if c.CloudInitProfile != "" {
+			return fmt.Errorf("SSH/Docker probe failed; inspect guest cloud-init status and /var/log/cloud-init-output.log: %w", err)
 		}
 		return fmt.Errorf("SSH/Docker probe: %s: %w", strings.TrimSpace(string(out)), err)
 	}

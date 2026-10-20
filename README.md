@@ -21,7 +21,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.16 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.17 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -113,6 +113,9 @@ initial `driver: docker` configuration.
 
 Choose **one** complete cloud-init source:
 
+- `HARVESTER_CLOUD_INIT_PROFILE=ubuntu-24.04-docker-v1`: opt-in bundled
+  bootstrap for a fresh Ubuntu 24.04 cloud image. See below.
+
 - `HARVESTER_CLOUD_INIT_TEMPLATE=default/ubuntu-docker`: load the existing
   Harvester ConfigMap's `data.cloudInit` using the provider's `KUBECONFIG` and
   `HARVESTER_CONTEXT`. A bare name uses `HARVESTER_NAMESPACE`.
@@ -135,8 +138,8 @@ resolver. ConfigMaps and VM cloud-init are not secret vaults: do not put private
 keys, kubeconfigs or API credentials in them.
 
 A complete source must include the intended guest SSH user's authorized public
-key and Docker setup. `HARVESTER_SSH_PUBLIC_KEY` is only used for the generated
-fallback when no complete source is selected; it is not merged into a template.
+key and Docker setup. `HARVESTER_SSH_PUBLIC_KEY` is used by the bundled profile and the generated
+fallback; it is not merged into custom complete sources.
 The matching private key stays on the client or in its SSH agent.
 
 ### Cloud-init CLI quoting and network access
@@ -219,8 +222,11 @@ logs during initialization, image lookup, disk provisioning, VM boot, and guest
 readiness. VM state is logged when it changes. A running VM still needs a
 reachable guest IP, working SSH credentials, and Docker before its workspace can
 start. Each SSH/Docker readiness probe is bounded to ten seconds within the
-existing ninety-second guest-readiness wait; timeout errors retain the last
-failed check. Long-lived workspace SSH transports have no added deadline.
+ninety-second guest-readiness wait, or fifteen minutes with the bundled profile; timeout errors retain the last
+failed check. Bundled-profile readiness errors redact guest SSH output; inspect
+guest logs directly for bootstrap details. Custom sources retain their SSH
+diagnostics. Host-key verification remains
+a distinct immediate failure. Long-lived workspace SSH transports have no added deadline.
 
 These messages populate the log pane. Devsy currently wraps external machine
 provider output as logs, so this provider-only integration cannot add structured
@@ -274,3 +280,50 @@ Linux and Windows, plus Linux release-packaging checks, through
 [CI](.github/workflows/ci.yml). Auto-merge follows the shared policy; GitHub
 Actions version bumps remain reviewable PRs, while eligible pin and digest
 updates can auto-merge after the required checks pass.
+
+### Bundled Ubuntu 24.04 Docker profile
+
+For a **new** VM backed by an Ubuntu 24.04 cloud image, select
+`HARVESTER_CLOUD_INIT_PROFILE=ubuntu-24.04-docker-v1` and provide
+`HARVESTER_SSH_PUBLIC_KEY`. The default remains disabled. Image selection stays
+explicit; this profile does not import images or install an OS from an ISO.
+Unset any complete inline, file, or ConfigMap source before selecting a profile.
+Conflicts fail without merging or overwriting saved custom configuration.
+Existing VMs are reused without applying changed cloud-init options. Their
+original profile is recorded on the VM and controls readiness checks, even if
+you later change the provider setting. Existing custom VMs keep their original
+SSH/Docker readiness checks. ISO images are rejected before disk creation when
+a bundled profile is selected.
+
+The helper embeds the same profile on Linux amd64/arm64, macOS amd64/arm64,
+and Windows amd64. Bundled user-data is gzip-compressed and base64-encoded to
+fit KubeVirt's 2 KiB decoded inline limit. Oversized keys or key comments fail
+before provisioning; custom source encoding is unchanged. It installs Docker Engine, CLI, containerd, Buildx, Compose,
+and QEMU guest agent using Docker's Ubuntu repository. The configured SSH user
+must be non-root and is granted passwordless sudo and Docker group access.
+Docker group membership grants root-equivalent control of the guest. The public
+key must be a single Ed25519, RSA, or ECDSA key. The VM name becomes the hostname
+and must be a DNS label of at most 63 characters.
+
+The guest needs DNS and outbound HTTPS to Ubuntu and `download.docker.com`.
+Bootstrap refuses other operating systems and is safe to rerun: repository files
+are replaced, package installation converges, and Docker membership is additive.
+Its script has a fourteen-minute deadline with a thirty-second kill grace. The provider allows fifteen minutes
+for guest IP, SSH, successful cloud-init completion, the active QEMU guest agent,
+Docker access as the SSH user, and Compose/Buildx. Each probe remains bounded to
+ten seconds. Bootstrap stages and package diagnostics remain in the guest's
+`/var/log/cloud-init-output.log`; they never enter status or workspace SSH output.
+Terminal cloud-init failures stop readiness immediately with diagnostic guidance.
+On timeout, inspect that file and `cloud-init status --long` in the guest. A retry
+reuses the VM rather than overwriting its disk or rerunning successful cloud-init.
+
+Run `scripts/check_cloudinit.sh` to validate synthetic generated user-data with
+Ubuntu 24.04's cloud-init schema in a disposable Docker container. This downloads
+Ubuntu packages into the container, not the host. The check does not boot a VM.
+Before release acceptance, use a separate disposable Harvester VM to prove
+cloud-init completion, guest-agent IP reporting, key-based SSH, non-root Docker,
+Compose/Buildx, and an actual project devcontainer. Never use an existing
+operator VM for this check.
+
+References: [Docker's Ubuntu installation guide](https://docs.docker.com/engine/install/ubuntu/)
+and [cloud-init schema validation](https://cloudinit.readthedocs.io/en/latest/howto/debug_user_data.html).
