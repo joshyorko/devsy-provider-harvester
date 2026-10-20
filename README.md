@@ -21,7 +21,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.15 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.16 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
