@@ -111,42 +111,96 @@ func imageCatalog(c config) ([]imageCatalogEntry, error) {
 	return entries, nil
 }
 
+func configuredImage() string {
+	if os.Getenv("HARVESTER_IMAGE_SELECTION_MODE") == "catalog" {
+		return os.Getenv("HARVESTER_IMAGE_PIN")
+	}
+	return env("HARVESTER_IMAGE_PIN", os.Getenv("HARVESTER_IMAGE"))
+}
+
+func legacyImageSelection(entries []imageCatalogEntry, legacy string) string {
+	for _, entry := range entries {
+		if entry.Ready && (entry.Reference == legacy || entry.Name == legacy) {
+			return entry.Reference
+		}
+	}
+	if strings.Contains(legacy, "/") || strings.HasPrefix(legacy, "image-") {
+		return ""
+	}
+	var matches []string
+	for _, entry := range entries {
+		if entry.DisplayName == legacy {
+			if !entry.Ready {
+				return ""
+			}
+			matches = append(matches, entry.Reference)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	return ""
+}
+
 func printImageOptions(c config, out io.Writer) error {
-	entries, err := imageCatalog(c)
-	description := "Choose a ready Harvester image by display name. This overrides the manual image setting; choose Use manual image setting to clear it."
-	manualLabel := "Use manual image setting"
-	if err != nil {
-		// Optional discovery must not break existing get-only credentials.
-		// Keep the error visible in the form; the images command reports details.
-		description = "Image catalog unavailable. Check kubeconfig, context, image namespace and image-list permission. The saved selection is preserved; you can still use a manual image reference. Run the helper's images command for details."
-		manualLabel += " (catalog unavailable)"
+	entries, catalogErr := imageCatalog(c)
+	description := "Select an available image from Harvester."
+	pin := env("HARVESTER_IMAGE_PIN", os.Getenv("HARVESTER_IMAGE_CHOICE"))
+	if pin == "" && os.Getenv("HARVESTER_IMAGE_SELECTION_MODE") != "catalog" {
+		pin = legacyImageSelection(entries, os.Getenv("HARVESTER_IMAGE"))
+	}
+	if catalogErr != nil {
+		description = "Image catalog unavailable. Check the connection, image namespace and image-list permission."
+		// Preserve a verified existing selection without exposing resource IDs.
+		candidate := pin
+		if candidate == "" && os.Getenv("HARVESTER_IMAGE_SELECTION_MODE") != "catalog" {
+			candidate = os.Getenv("HARVESTER_IMAGE")
+		}
+		if ref, err := parseImageReference(candidate, c.ImageNS); err == nil {
+			image, err := readImageReference(c, ref)
+			if err != nil {
+				return fmt.Errorf("cannot verify saved image while catalog is unavailable: %w", err)
+			}
+			if image != nil && imageReadiness(*image) == "ready" {
+				pin = image.Metadata.Namespace + "/" + image.Metadata.Name
+				entries = []imageCatalogEntry{{DisplayName: imageDisplayName(*image), Namespace: image.Metadata.Namespace, Name: image.Metadata.Name, Reference: pin, Ready: true, Status: "ready"}}
+			}
+		}
 	}
 	type choice struct {
 		Value       string `json:"value"`
 		DisplayName string `json:"displayName"`
 	}
-	// An explicit empty choice prevents Devsy from auto-selecting a sole image.
-	choices := []choice{{"", manualLabel}}
-	pin := env("HARVESTER_IMAGE_PIN", os.Getenv("HARVESTER_IMAGE_CHOICE"))
-	found := pin == ""
+	choices := []choice{{"", "Select an image"}}
+	counts := map[string]int{}
 	for _, entry := range entries {
-		if !entry.Ready && entry.Reference != pin {
+		if entry.Ready {
+			counts[entry.DisplayName]++
+		}
+	}
+	selected := ""
+	for _, entry := range entries {
+		if !entry.Ready {
 			continue
 		}
-		label := entry.DisplayName + " (" + entry.Reference + ")"
-		if !entry.Ready {
-			label += " — " + entry.Status
+		if counts[entry.DisplayName] > 1 {
+			description += " Images with duplicate names must be renamed in Harvester before selecting them."
+			if entry.Reference != pin {
+				continue
+			}
 		}
-		choices = append(choices, choice{entry.Reference, label})
-		found = found || entry.Reference == pin
+		choices = append(choices, choice{entry.Reference, entry.DisplayName})
+		if entry.Reference == pin {
+			selected = pin
+		}
 	}
-	if !found {
-		choices = append(choices, choice{pin, "Saved image: " + pin + " (not in current catalog)"})
+	if pin != "" && selected == "" && catalogErr == nil {
+		description = "The previously selected image is unavailable. Select an available image from Harvester."
 	}
 	return json.NewEncoder(out).Encode(map[string]any{"options": map[string]any{
 		"HARVESTER_IMAGE_CHOICE": map[string]any{
-			"description": description,
-			"required":    false, "default": pin, "enum": choices,
+			"displayName": "Image", "description": description,
+			"required": false, "default": selected, "enum": choices,
 		},
 	}})
 }
@@ -175,27 +229,35 @@ func printImages(c config, asJSON bool, out io.Writer) error {
 
 var resourceImageName = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
+func readImageReference(c config, ref imageInfo) (*harvesterImage, error) {
+	if !resourceImageName.MatchString(ref.Name) {
+		return nil, nil
+	}
+	out, err := kubectl(c, "get", "virtualmachineimage", ref.Name, "-n", ref.Namespace, "-o", "json", "--ignore-not-found")
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return nil, nil
+	}
+	var image harvesterImage
+	if err := json.Unmarshal(out, &image); err != nil {
+		return nil, fmt.Errorf("decode Harvester image: %w", err)
+	}
+	if image.Metadata.Name != ref.Name || image.Metadata.Namespace != ref.Namespace {
+		return nil, errors.New("image lookup returned an unexpected resource identity")
+	}
+	return &image, nil
+}
+
 func resolveImage(c config) (imageInfo, error) {
 	ref, err := parseImageReference(c.Image, c.ImageNS)
 	if err != nil {
 		return imageInfo{}, err
 	}
-	var selected *harvesterImage
-	if resourceImageName.MatchString(ref.Name) {
-		out, err := kubectl(c, "get", "virtualmachineimage", ref.Name, "-n", ref.Namespace, "-o", "json", "--ignore-not-found")
-		if err != nil {
-			return imageInfo{}, err
-		}
-		if len(bytes.TrimSpace(out)) != 0 {
-			var image harvesterImage
-			if err := json.Unmarshal(out, &image); err != nil {
-				return imageInfo{}, fmt.Errorf("decode Harvester image: %w", err)
-			}
-			if image.Metadata.Name != ref.Name || image.Metadata.Namespace != ref.Namespace {
-				return imageInfo{}, errors.New("image lookup returned an unexpected resource identity")
-			}
-			selected = &image
-		}
+	selected, err := readImageReference(c, ref)
+	if err != nil {
+		return imageInfo{}, err
 	}
 	// Namespaced references and Harvester-generated IDs are stable identifiers.
 	// Never reinterpret a deleted ID as another image's display name.

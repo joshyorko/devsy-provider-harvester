@@ -216,6 +216,7 @@ func lifecycleFixture(t *testing.T) string {
 	t.Setenv("HARVESTER_IMAGE", "test-image")
 	t.Setenv("HARVESTER_IMAGE_PIN", "")
 	t.Setenv("HARVESTER_IMAGE_CHOICE", "")
+	t.Setenv("HARVESTER_IMAGE_SELECTION_MODE", "")
 	t.Setenv("HARVESTER_IMAGE_TYPE", "qcow2")
 	t.Setenv("HARVESTER_USER_DATA", "#cloud-config\nsecret-fixture-must-not-be-logged\n")
 	return exe

@@ -132,7 +132,18 @@ func TestOptionalImagePickerReportsFailureWithoutBlockingSavedImage(t *testing.T
 	}
 }
 
-func TestImageOptionsNeverSelectFirstImageAndPreservePin(t *testing.T) {
+func TestImagePickerDoesNotClearSavedSelectionOnConnectionFailure(t *testing.T) {
+	exe := imageFixture(t, readyImage, `{"items":[]}`)
+	t.Setenv("HARVESTER_TEST_IMAGE_LIST_FAILURE", "1")
+	t.Setenv("HARVESTER_TEST_IMAGE_FAILURE", "1")
+	t.Setenv("HARVESTER_IMAGE_PIN", "default/image-a")
+	out, stderr, err := runLifecycleFixture(t, exe, "image-options")
+	if err == nil || out != "" || !strings.Contains(stderr, "cannot verify saved image") {
+		t.Fatalf("connection failure must stop resolution before clearing selection: %q %q %v", out, stderr, err)
+	}
+}
+
+func TestImageOptionsNeverSelectFirstImageAndPreserveAvailablePin(t *testing.T) {
 	exe := imageFixture(t, "", `{"items":[`+readyImage+`]}`)
 	for _, pin := range []string{"", "default/image-a", "other/image-old"} {
 		t.Setenv("HARVESTER_IMAGE_PIN", pin)
@@ -153,25 +164,45 @@ func TestImageOptionsNeverSelectFirstImageAndPreservePin(t *testing.T) {
 			t.Fatal(err)
 		}
 		choice := payload.Options["HARVESTER_IMAGE_CHOICE"]
-		if choice.Default != pin || len(choice.Enum) < 2 || choice.Enum[0].Value != "" || choice.Enum[1].Value != "default/image-a" || !strings.Contains(choice.Enum[1].DisplayName, "Ubuntu Noble") {
-			t.Fatalf("selector lost manual fallback, label, or saved pin: %s", out)
+		want := pin
+		if pin == "other/image-old" {
+			want = ""
 		}
-		found := pin == ""
-		for _, item := range choice.Enum {
-			found = found || item.Value == pin
-		}
-		if !found {
-			t.Fatalf("saved selection missing from refreshed choices: %s", out)
+		if choice.Default != want || len(choice.Enum) != 2 || choice.Enum[0].Value != "" || choice.Enum[0].DisplayName != "Select an image" || choice.Enum[1].Value != "default/image-a" || choice.Enum[1].DisplayName != "Ubuntu Noble" {
+			t.Fatalf("selector must offer only ready images with a neutral placeholder: %s", out)
 		}
 	}
 }
 
-func TestImageOptionsRetainChoiceWhenNamespaceInvalidatesPin(t *testing.T) {
+func TestImageOptionsClearChoiceOutsideCatalogWithoutRemapping(t *testing.T) {
 	exe := imageFixture(t, "", `{"items":[]}`)
 	t.Setenv("HARVESTER_IMAGE_CHOICE", "old-namespace/image-a")
 	out, stderr, err := runLifecycleFixture(t, exe, "image-options")
-	if err != nil || stderr != "" || !strings.Contains(out, `"default":"old-namespace/image-a"`) || !strings.Contains(out, `"value":"old-namespace/image-a"`) {
-		t.Fatalf("namespace refresh discarded the selected identity: %q %q %v", out, stderr, err)
+	if err != nil || stderr != "" || !strings.Contains(out, `"default":""`) || strings.Contains(out, `"value":"old-namespace/image-a"`) {
+		t.Fatalf("selector offered an image outside its ready catalog: %q %q %v", out, stderr, err)
+	}
+}
+
+func TestImageSelectorMigratesExistingImageWithoutManualControl(t *testing.T) {
+	for _, legacy := range []string{"image-a", "default/image-a", "Ubuntu Noble"} {
+		t.Run(legacy, func(t *testing.T) {
+			exe := imageFixture(t, "", `{"items":[`+readyImage+`]}`)
+			t.Setenv("HARVESTER_IMAGE", legacy)
+			out, _, err := runLifecycleFixture(t, exe, "image-options")
+			if err != nil || !strings.Contains(out, `"default":"default/image-a"`) || !strings.Contains(out, `"displayName":"Image"`) || strings.Contains(strings.ToLower(out), "manual") {
+				t.Fatalf("existing selection was not migrated into one image control: %q %v", out, err)
+			}
+		})
+	}
+}
+
+func TestClearingCatalogSelectionCannotReactivateLegacyImage(t *testing.T) {
+	lifecycleFixture(t)
+	t.Setenv("HARVESTER_IMAGE", "old-image")
+	t.Setenv("HARVESTER_IMAGE_PIN", "")
+	t.Setenv("HARVESTER_IMAGE_SELECTION_MODE", "catalog")
+	if got := load().Image; got != "" {
+		t.Fatalf("empty selector silently activated hidden legacy value %q", got)
 	}
 }
 
