@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -123,5 +128,55 @@ func TestBundledBootstrapHasHardDeadline(t *testing.T) {
 	}
 	if !strings.Contains(data, "[timeout, '--kill-after=30', '840', /usr/local/sbin/devsy-docker-bootstrap]") {
 		t.Fatal("bootstrap must terminate processes that ignore TERM within readiness budget")
+	}
+}
+
+func TestBundledManifestFitsKubeVirtInlineLimit(t *testing.T) {
+	c := load()
+	c.CloudInitProfile = "ubuntu-24.04-docker-v1"
+	c.SSHUser = "developer"
+	c.VMName = "proof"
+	c.SSHPublicKey = syntheticPublicKey()
+	data, err := resolveUserData(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.UserData = data
+	vm, err := buildVMManifest(c, imageInfo{Format: "qcow2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloud := vm.Spec.Template.Spec.Volumes[len(vm.Spec.Template.Spec.Volumes)-1].CloudInitNoCloud
+	if cloud["userData"] != "" {
+		t.Fatal("uncompressed profile exceeds KubeVirt inline limit")
+	}
+	compressed, err := base64.StdEncoding.DecodeString(cloud["userDataBase64"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compressed) > 2048 {
+		t.Fatal("compressed profile exceeds KubeVirt inline limit")
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	decoded, err := io.ReadAll(reader)
+	if err != nil || string(decoded) != data {
+		t.Fatal("compressed profile did not round-trip")
+	}
+}
+
+func TestBundledRejectsOversizedCompressedKeyBeforeProvisioning(t *testing.T) {
+	// Deterministic public test noise, not credentials. A repeated string would compress.
+	var comment strings.Builder
+	for n := 0; n < 150; n++ {
+		sum := sha256.Sum256([]byte(strconv.Itoa(n)))
+		comment.WriteString(base64.StdEncoding.EncodeToString(sum[:]))
+	}
+	_, err := resolveUserData(config{CloudInitProfile: "ubuntu-24.04-docker-v1", SSHUser: "developer", VMName: "proof", SSHPublicKey: syntheticPublicKey() + comment.String()})
+	if err == nil || !strings.Contains(err.Error(), "2 KiB") {
+		t.Fatal("oversized compressed profile must fail before provisioning")
 	}
 }

@@ -296,7 +296,9 @@ Conflicts fail without merging or overwriting saved custom configuration.
 Existing VMs are reused without applying changed cloud-init options.
 
 The helper embeds the same profile on Linux amd64/arm64, macOS amd64/arm64,
-and Windows amd64. It installs Docker Engine, CLI, containerd, Buildx, Compose,
+and Windows amd64. Bundled user-data is gzip-compressed and base64-encoded to
+fit KubeVirt's 2 KiB decoded inline limit. Oversized keys or key comments fail
+before provisioning; custom source encoding is unchanged. It installs Docker Engine, CLI, containerd, Buildx, Compose,
 and QEMU guest agent using Docker's Ubuntu repository. The configured SSH user
 must be non-root and is granted passwordless sudo and Docker group access.
 Docker group membership grants root-equivalent control of the guest. The public

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
@@ -36,6 +37,9 @@ func renderBundledProfile(c config) (string, error) {
 	var out bytes.Buffer
 	if err = t.Execute(&out, c); err != nil {
 		return "", errors.New("could not render embedded cloud-init profile")
+	}
+	if _, err := compressedUserData(out.String()); err != nil {
+		return "", err
 	}
 	return out.String(), nil
 }
@@ -85,4 +89,21 @@ func guestReadyTimeout(c config) time.Duration {
 		return 15 * time.Minute
 	}
 	return 90 * time.Second
+}
+
+// KubeVirt limits decoded inline data to 2 KiB. cloud-init recognizes gzip
+// user-data by its magic bytes; no Secret or additional cluster resource is needed.
+func compressedUserData(data string) (string, error) {
+	var out bytes.Buffer
+	writer := gzip.NewWriter(&out)
+	if _, err := writer.Write([]byte(data)); err != nil {
+		return "", errors.New("compress bundled cloud-init profile")
+	}
+	if err := writer.Close(); err != nil {
+		return "", errors.New("compress bundled cloud-init profile")
+	}
+	if out.Len() > 2048 {
+		return "", errors.New("bundled cloud-init exceeds KubeVirt's 2 KiB compressed limit; shorten the public-key comment or use a smaller public key")
+	}
+	return base64.StdEncoding.EncodeToString(out.Bytes()), nil
 }

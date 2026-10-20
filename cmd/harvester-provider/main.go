@@ -162,7 +162,15 @@ func buildVMManifest(c config, image imageInfo) (vmManifest, error) {
 		userData = "#cloud-config\nusers:\n  - name: " + c.SSHUser + "\n    sudo: ALL=(ALL) NOPASSWD:ALL\n    shell: /bin/bash\n    ssh_authorized_keys:\n      - " + c.SSHPublicKey + "\n"
 	}
 	if userData != "" {
-		m.Spec.Template.Spec.Volumes = append(m.Spec.Template.Spec.Volumes, vmVolume{Name: "cloudinit", CloudInitNoCloud: map[string]string{"userData": userData}})
+		cloudInitData := map[string]string{"userData": userData}
+		if c.CloudInitProfile != "" {
+			encoded, err := compressedUserData(userData)
+			if err != nil {
+				return vmManifest{}, err
+			}
+			cloudInitData = map[string]string{"userDataBase64": encoded}
+		}
+		m.Spec.Template.Spec.Volumes = append(m.Spec.Template.Spec.Volumes, vmVolume{Name: "cloudinit", CloudInitNoCloud: cloudInitData})
 		m.Spec.Template.Spec.Domain["devices"].(map[string]any)["disks"] = append(m.Spec.Template.Spec.Domain["devices"].(map[string]any)["disks"].([]map[string]any), map[string]any{"name": "cloudinit", "disk": map[string]string{"bus": "virtio"}})
 	}
 	return m, nil
