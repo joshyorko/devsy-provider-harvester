@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -143,6 +144,10 @@ func init() {
 			io.WriteString(os.Stdout, fmtKind+" applied\n")
 		}
 	case "ssh":
+		if noise := os.Getenv("HARVESTER_TEST_SSH_ERROR_OUTPUT"); noise != "" {
+			fmt.Fprint(os.Stderr, noise)
+			os.Exit(1)
+		}
 		if file := os.Getenv("HARVESTER_TEST_SSH_CALLS"); file != "" {
 			f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 			if err != nil {

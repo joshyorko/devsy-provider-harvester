@@ -1,7 +1,7 @@
 # Provider configuration reference
 
-This reference describes the options in [provider.yaml](../provider.yaml) for
-`v0.1.15`. Options are saved on the client running Devsy. Paths refer to that
+This reference describes the options in [provider.yaml](../provider.yaml) in this
+checkout. Options are saved on the client running Devsy. Paths refer to that
 client, including when Devsy runs on Windows or inside a container.
 
 ## Cluster access
@@ -44,15 +44,21 @@ must provide Docker for Devsy's Docker driver.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `HARVESTER_SSH_PUBLIC_KEY` | Unset | Authorized public key used only by the generated fallback. Not merged into a complete cloud-init source. |
+| `HARVESTER_SSH_PUBLIC_KEY` | Unset | Authorized public key used by the generated fallback and bundled profile. Not merged into custom complete sources. |
+| `HARVESTER_CLOUD_INIT_PROFILE` | Unset | Opt-in `ubuntu-24.04-docker-v1` for a fresh Ubuntu 24.04 cloud image. Requires the public key, a valid non-root SSH user, and a DNS-label VM name. |
 | `HARVESTER_CLOUD_INIT_TEMPLATE` | Unset | Existing Harvester ConfigMap, `NAMESPACE/NAME` or a name in `HARVESTER_NAMESPACE`. Reads `data.cloudInit` using the configured kubeconfig and context. |
 | `HARVESTER_USER_DATA_FILE` | Unset | Local path to complete cloud-init user-data. Windows clients require a path valid on Windows. |
 | `HARVESTER_USER_DATA` | Unset | Inline complete cloud-init user-data. Marked as a password option in the manifest. |
 
-Complete sources must include the intended guest user's authorized public key
+Custom complete sources must include the intended guest user's authorized public key
 and Docker setup. The resolver rejects empty sources, conflicting sources, and
 content larger than 64 KiB. ConfigMaps and VM cloud-init are not secret vaults.
 Private keys and kubeconfigs stay on the client.
+
+The bundled profile installs Docker Engine/CLI, containerd, Compose, Buildx, and
+QEMU guest agent. It allows fifteen minutes for guest readiness, including
+successful cloud-init completion; custom sources retain ninety seconds.
+See [bundled bootstrap](../README.md#bundled-ubuntu-2404-docker-profile).
 
 See [cloud-init sources](../README.md#saved-harvester-templates-and-local-files)
 and [multiline CLI quoting](../README.md#cloud-init-cli-quoting-and-network-access).

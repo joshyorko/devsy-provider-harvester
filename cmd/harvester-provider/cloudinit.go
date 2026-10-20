@@ -12,18 +12,25 @@ import (
 // Source contents are never included in errors or normal provider output.
 func resolveUserData(c config) (string, error) {
 	sources := 0
-	for _, s := range []string{c.UserData, c.UserDataFile, c.CloudInitTemplate} {
+	for _, s := range []string{c.UserData, c.UserDataFile, c.CloudInitTemplate, c.CloudInitProfile} {
 		if s != "" {
 			sources++
 		}
 	}
 	if sources > 1 {
-		return "", errors.New("choose only one of HARVESTER_USER_DATA, HARVESTER_USER_DATA_FILE, or HARVESTER_CLOUD_INIT_TEMPLATE")
+		return "", errors.New("choose only one of HARVESTER_USER_DATA, HARVESTER_USER_DATA_FILE, HARVESTER_CLOUD_INIT_TEMPLATE, or HARVESTER_CLOUD_INIT_PROFILE")
 	}
 	if sources == 0 {
 		return "", nil
 	}
 	data := c.UserData
+	if c.CloudInitProfile != "" {
+		var err error
+		data, err = renderBundledProfile(c)
+		if err != nil {
+			return "", err
+		}
+	}
 	if c.UserDataFile != "" {
 		content, err := os.ReadFile(c.UserDataFile)
 		if err != nil {
