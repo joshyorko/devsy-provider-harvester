@@ -55,7 +55,7 @@ func TestKubectlExplicitPathWorksWithoutShellPATH(t *testing.T) {
 }
 
 func TestSSHTransportHasNoSessionDeadline(t *testing.T) {
-	cmd := sshExecCommand(config{SSHPort: "22", SSHUser: "ubuntu"}, "host", "long-running command")
+	cmd := sshExecCommand(config{SSHPort: "22", SSHUser: "ubuntu"}, "host", "devsy-harvester-fixture-vm", "long-running command")
 	if cmd.Cancel != nil {
 		t.Fatal("Devsy SSH transports must remain open for the session lifetime")
 	}

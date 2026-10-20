@@ -55,6 +55,14 @@ func init() {
 			}
 			io.WriteString(os.Stdout, `{"status":{"storageClassName":"test-image-storage"}}`)
 		case strings.Contains(args, "get virtualmachine "):
+			if strings.Contains(args, "jsonpath={.metadata.uid}") {
+				if os.Getenv("HARVESTER_TEST_UID_FAILURE") == "1" {
+					os.Stderr.WriteString("forbidden reading VM identity")
+					os.Exit(1)
+				}
+				io.WriteString(os.Stdout, env("HARVESTER_TEST_VM_UID", "fixture-vm-uid"))
+				break
+			}
 			if strings.Contains(args, "--ignore-not-found") {
 				if failure := os.Getenv("HARVESTER_TEST_VM_LOOKUP_FAILURE"); failure != "" {
 					os.Stderr.WriteString(failure)
@@ -117,6 +125,18 @@ func init() {
 			io.WriteString(os.Stdout, fmtKind+" applied\n")
 		}
 	case "ssh":
+		if file := os.Getenv("HARVESTER_TEST_SSH_CALLS"); file != "" {
+			f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+			if err != nil {
+				os.Exit(2)
+			}
+			json.NewEncoder(f).Encode(os.Args[1:])
+			f.Close()
+		}
+		if os.Getenv("HARVESTER_TEST_HOST_KEY_FAILURE") == "1" {
+			os.Stderr.WriteString("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.")
+			os.Exit(255)
+		}
 		if os.Getenv("HARVESTER_TEST_PROXY_CHILD") == "1" {
 			time.Sleep(time.Minute)
 			os.Exit(0)

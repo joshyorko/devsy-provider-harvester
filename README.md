@@ -13,7 +13,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.12 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.13 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -98,6 +98,22 @@ can be supplied with `HARVESTER_SSH_HOST=127.0.0.1` and
 authenticated Kubernetes API without exposing a node port or changing cluster
 network policy. SSH flags currently accept simple whitespace-separated tokens;
 put commands containing spaces in a wrapper.
+
+### SSH identity with dynamic addresses
+
+SSH host keys are tracked under `devsy-harvester-<VM UID>` in the client's
+normal `known_hosts` file. The provider obtains the immutable VM UID through
+the authenticated Harvester API for both readiness probes and workspace SSH
+connections. A new VM can use a previously assigned IP without colliding with
+that IP's old host-key entry. The same VM keeps its trust identity when its
+address changes; no static IP reservation is needed.
+
+The first connection to a VM uses OpenSSH's `accept-new` policy. A changed key
+for that same VM remains an error, and readiness stops immediately with the SSH
+diagnostic. Verify the VM's key before updating its trust entry. The provider
+does not remove old keys or disable host-key verification. Existing IP-based
+entries are preserved; after upgrading, the first connection records the new
+UID-based entry. If VM identity lookup fails, SSH does not connect.
 
 ### Reusing an existing machine
 

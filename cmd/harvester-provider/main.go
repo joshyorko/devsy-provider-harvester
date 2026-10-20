@@ -16,6 +16,8 @@ import (
 
 const commandTimeout = 2 * time.Minute
 
+var errHostKeyVerification = errors.New("SSH host key verification failed; verify the VM's host key before updating its known_hosts entry")
+
 type config struct{ Kubeconfig, Context, Namespace, VMName, Image, ImageNS, ImageType, StorageClass, CPU, Memory, Disk, SSHHost, SSHUser, SSHPort, SSHFlags, SSHPublicKey, UserData, UserDataFile, CloudInitTemplate, Network string }
 
 func env(n, fallback string) string {
@@ -448,6 +450,9 @@ func waitForGuest(c config) error {
 				progress("SSH and Docker are ready")
 				return nil
 			}
+			if errors.Is(err, errHostKeyVerification) {
+				return err
+			}
 		}
 		lastErr = err
 		select {
@@ -459,7 +464,11 @@ func waitForGuest(c config) error {
 }
 
 func probeGuest(ctx context.Context, c config, host string) error {
-	command := sshExecCommand(c, host, "command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1")
+	alias, err := sshHostKeyAlias(ctx, c)
+	if err != nil {
+		return err
+	}
+	command := sshExecCommand(c, host, alias, "command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1")
 	cmd := exec.CommandContext(ctx, command.Path, command.Args[1:]...)
 	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
@@ -467,6 +476,9 @@ func probeGuest(ctx context.Context, c config, host string) error {
 		return fmt.Errorf("SSH/Docker probe: %w", ctx.Err())
 	}
 	if err != nil {
+		if strings.Contains(string(out), "REMOTE HOST IDENTIFICATION HAS CHANGED") || strings.Contains(string(out), "Host key verification failed") {
+			return fmt.Errorf("%w: %s", errHostKeyVerification, strings.TrimSpace(string(out)))
+		}
 		return fmt.Errorf("SSH/Docker probe: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
@@ -545,12 +557,30 @@ func sshCommand(c config, command string) error {
 	return sshRun(c, host, command)
 }
 func sshRun(c config, host, command string) error {
-	x := sshExecCommand(c, host, command)
+	alias, err := sshHostKeyAlias(context.Background(), c)
+	if err != nil {
+		return err
+	}
+	x := sshExecCommand(c, host, alias, command)
 	x.Stdin, x.Stdout, x.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return x.Run()
 }
-func sshExecCommand(c config, host, command string) *exec.Cmd {
-	args := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-p", c.SSHPort}
+func sshHostKeyAlias(ctx context.Context, c config) (string, error) {
+	out, err := kubectlInputContext(ctx, c, nil, "get", "virtualmachine", c.VMName, "-n", c.Namespace, "-o", "jsonpath={.metadata.uid}")
+	if err != nil {
+		return "", fmt.Errorf("resolve VM identity for SSH: %w", err)
+	}
+	uid := strings.TrimSpace(string(out))
+	if uid == "" || strings.IndexFunc(uid, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-')
+	}) >= 0 {
+		return "", errors.New("VM has no valid UID for SSH host key verification")
+	}
+	return "devsy-harvester-" + uid, nil
+}
+
+func sshExecCommand(c config, host, hostKeyAlias, command string) *exec.Cmd {
+	args := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "HostKeyAlias=" + hostKeyAlias, "-o", "CheckHostIP=no", "-p", c.SSHPort}
 	if c.SSHFlags != "" {
 		args = append(args, strings.Fields(c.SSHFlags)...)
 	}
