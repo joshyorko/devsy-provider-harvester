@@ -1,11 +1,19 @@
-# Devsy Harvester Provider
+# Harvester provider for Devsy
 
 `devsy-provider-harvester` provisions Devsy machine providers as Harvester
 VirtualMachine resources and connects to the resulting Linux VM over SSH.
 Devsy downloads the provider helper from the version-pinned GitHub release described by
 `provider.yaml`.
 
-## Install or update
+## Getting started
+
+You need a Harvester kubeconfig, an existing guest image, and SSH access from
+your Devsy client to the VM. The Linux guest must provide SSH, Docker, and the
+authorized public key for your SSH user. See [client prerequisites](#desktop-and-windows-prerequisites)
+and [cloud-init configuration](#saved-harvester-templates-and-local-files) before
+adding the provider.
+
+### Install or update
 
 Use the canonical GitHub source (without an `https://` prefix) so Devsy can
 discover releases and consume the checksummed release manifest:
@@ -13,13 +21,27 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester@v0.1.14 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.14 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
 
 The release asset `provider.yaml` includes per-platform SHA-256 checksums;
 the repository manifest is the release template, not the recommended install URL.
+If you use Devsy's **Reuse machine** setting, pass `--single-machine` to
+`provider init`; its default selects a separate machine per workspace.
+
+### Create your first workspace
+
+From your project's directory, run:
+
+```sh
+devsy workspace up . --provider harvester
+```
+
+Devsy provisions a Harvester VM and runs the workspace's devcontainer inside
+that VM with its Docker driver. The first launch waits for the guest IP, SSH,
+and Docker before starting the workspace. No separate KubeVirt driver is needed.
 
 ## Desktop and Windows prerequisites
 
@@ -29,6 +51,19 @@ no kubectl PATH setup is required. Install OpenSSH on the client. To override
 the managed kubectl, set `HARVESTER_KUBECTL_PATH` to an absolute executable path.
 Use a kubeconfig path valid on that client; kubeconfigs and private SSH keys are
 not distributed with the provider. Windows uses the same Linux SSH/Docker guest.
+
+## Options
+
+The [configuration reference](docs/configuration.md) lists every provider option
+and its default from [provider.yaml](provider.yaml). Set options when adding the
+provider with `-o KEY=VALUE`, or change the saved options later:
+
+```sh
+devsy provider set harvester -o HARVESTER_CPU=8 -o HARVESTER_MEMORY=16Gi
+```
+
+Image, CPU, memory, disk, network, and cloud-init changes apply to new VMs. They
+do not resize or reconfigure an existing VM.
 
 ## Image selection
 
@@ -137,6 +172,13 @@ and mode match; the claim is never rewritten. A legacy unlabeled orphan claim
 without a VM must be inspected and recovered separately. This does not change
 Devsy's cleanup of interrupted workspace creation.
 
+Devsy can remove its local machine record after interrupted creation while
+leaving the VM behind. A subsequent workspace may reference that missing record.
+A worker can also exit with an error while its task remains pending or Checking.
+Provider reattachment can reuse an owned VM, but it cannot repair Devsy's local
+records or task state. These cancellation and task-state limitations remain in
+Devsy; successful provider cleanup does not guarantee cancellation recovery.
+
 ### Launch progress and readiness
 
 The provider writes `harvester:` progress messages to Devsy's existing launch
@@ -167,11 +209,35 @@ provisioning separate from Devsy's workspace driver. It discovers the VM IP
 from the VMI when `HARVESTER_SSH_HOST` is not supplied. No separate KubeVirt
 driver is required for this path.
 
-## Build
+## Development
 
 ```sh
 go build -o harvester-provider ./cmd/harvester-provider
+go test ./...
+python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
-For local development, build the binary and place it on `PATH`; normal Devsy
-installs download the matching helper from the GitHub release.
+The build command creates a local helper. Normal Devsy installs download the
+matching helper from the GitHub release.
+
+The repository keeps the provider manifest at the root and the helper under
+`cmd/`, with release packaging separate from runtime code:
+
+| Path | Purpose |
+| --- | --- |
+| [provider.yaml](provider.yaml) | Provider options, lifecycle commands, and pinned binary URLs. |
+| [cmd/harvester-provider/](cmd/harvester-provider/) | Go helper and its tests. |
+| [scripts/](scripts/) | Release manifest and checksum generation, with packaging tests. |
+| [.github/workflows/](.github/workflows/) | CI and release workflows. |
+| [docs/configuration.md](docs/configuration.md) | Provider option reference. |
+| [docs/superpowers/specs/](docs/superpowers/specs/) | Original design notes. |
+
+## Dependency updates
+
+[Patchraptor](https://github.com/joshyorko/renovate-config) discovers this
+repository and supplies its inherited Renovate policy. [renovate.json](renovate.json)
+opts this repository into that runner. Pull requests run Go tests and vet on
+Linux and Windows, plus Linux release-packaging checks, through
+[CI](.github/workflows/ci.yml). Auto-merge follows the shared policy; GitHub
+Actions version bumps remain reviewable PRs, while eligible pin and digest
+updates can auto-merge after the required checks pass.
