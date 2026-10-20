@@ -4,13 +4,20 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -159,6 +166,9 @@ func TestBundledManifestFitsKubeVirtInlineLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if vm.Metadata.Annotations["devsy.sh/cloud-init-profile"] != c.CloudInitProfile {
+		t.Fatal("bundled VM must retain its creation profile for reattachment")
+	}
 	cloud := vm.Spec.Template.Spec.Volumes[len(vm.Spec.Template.Spec.Volumes)-1].CloudInitNoCloud
 	if cloud["userData"] != "" {
 		t.Fatal("uncompressed profile exceeds KubeVirt inline limit")
@@ -191,5 +201,136 @@ func TestBundledRejectsOversizedCompressedKeyBeforeProvisioning(t *testing.T) {
 	_, err := resolveUserData(config{CloudInitProfile: "ubuntu-24.04-docker-v1", SSHUser: "developer", VMName: "proof", SSHPublicKey: syntheticPublicKey() + comment.String()})
 	if err == nil || !strings.Contains(err.Error(), "2 KiB") {
 		t.Fatal("oversized compressed profile must fail before provisioning")
+	}
+}
+
+func TestBundledProfileRejectsISOBeforeProvisioning(t *testing.T) {
+	exe := lifecycleFixture(t)
+	t.Setenv("HARVESTER_CLOUD_INIT_PROFILE", "ubuntu-24.04-docker-v1")
+	t.Setenv("HARVESTER_USER_DATA", "")
+	t.Setenv("HARVESTER_SSH_PUBLIC_KEY", syntheticPublicKey())
+	t.Setenv("HARVESTER_IMAGE_TYPE", "iso")
+	t.Setenv("HARVESTER_STORAGE_CLASS", "test-storage")
+	out, stderr, err := runLifecycleFixture(t, exe, "create")
+	if err == nil || !strings.Contains(stderr, "cloud image, not an ISO") || strings.Contains(out, "Provisioning root disk") {
+		t.Fatalf("ISO bootstrap reached resource creation: %q %q %v", out, stderr, err)
+	}
+}
+
+func TestReusedVMReadinessFollowsItsOriginalProfile(t *testing.T) {
+	for _, bundled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(bundled), func(t *testing.T) {
+			exe := lifecycleFixture(t)
+			data := existingVMFixture
+			if bundled {
+				data = strings.Replace(data, `"uid":"existing-vm-uid"`, `"uid":"existing-vm-uid","annotations":{"devsy.sh/cloud-init-profile":"ubuntu-24.04-docker-v1"}`, 1)
+				t.Setenv("HARVESTER_CLOUD_INIT_PROFILE", "")
+			} else {
+				t.Setenv("HARVESTER_CLOUD_INIT_PROFILE", "ubuntu-24.04-docker-v1")
+			}
+			vmFile, callsFile := existingVMFiles(t, data)
+			sshFile := filepath.Join(t.TempDir(), "ssh.json")
+			t.Setenv("HARVESTER_TEST_SSH_CALLS", sshFile)
+			_, stderr, err := runLifecycleFixture(t, exe, "create")
+			if err != nil {
+				t.Fatalf("reuse failed: %q %v", stderr, err)
+			}
+			calls, err := os.ReadFile(sshFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(calls), "cloud-init status") != bundled {
+				t.Fatalf("saved provider settings changed existing VM readiness: %s", calls)
+			}
+			assertNoDefinitionWrites(t, vmFile, callsFile, data)
+		})
+	}
+}
+
+func TestBundledKeysRejectInvalidCryptographicValues(t *testing.T) {
+	for _, parts := range [][][]byte{
+		{[]byte("ssh-rsa"), []byte{0}, make([]byte, 256)},
+		{[]byte("ecdsa-sha2-nistp256"), []byte("nistp256"), append([]byte{4}, make([]byte, 64)...)},
+	} {
+		var wire []byte
+		for _, part := range parts {
+			wire = binary.BigEndian.AppendUint32(wire, uint32(len(part)))
+			wire = append(wire, part...)
+		}
+		key := string(parts[0]) + " " + base64.StdEncoding.EncodeToString(wire)
+		if validPublicKey(key) {
+			t.Fatalf("invalid public key values accepted for %s", parts[0])
+		}
+	}
+}
+
+func TestBundledTerminalFailureStopsReadinessImmediately(t *testing.T) {
+	lifecycleFixture(t)
+	t.Setenv("HARVESTER_TEST_SSH_EXIT_CODE", "42")
+	ctxStart := time.Now()
+	err := waitForGuest(config{SSHPort: "22", SSHUser: "ubuntu", CloudInitProfile: "ubuntu-24.04-docker-v1"})
+	if !errors.Is(err, errBundledBootstrap) || time.Since(ctxStart) > 5*time.Second {
+		t.Fatalf("terminal bootstrap failure was retried: %v", err)
+	}
+}
+
+func TestBundledProbeChecksBootstrapFailureBeforeDocker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("guest POSIX shell executes on Linux, not the Windows client")
+	}
+	lifecycleFixture(t)
+	file := filepath.Join(t.TempDir(), "ssh.json")
+	t.Setenv("HARVESTER_TEST_SSH_CALLS", file)
+	if err := probeGuest(context.Background(), config{SSHPort: "22", SSHUser: "ubuntu", CloudInitProfile: "ubuntu-24.04-docker-v1"}, "192.0.2.10"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	if err = json.Unmarshal(data, &args); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	// Simulate failed cloud-init before Docker installation. The actual probe must
+	// return the terminal signal instead of waiting for a nonexistent Docker CLI.
+	if err = os.WriteFile(filepath.Join(dir, "cloud-init"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", args[len(args)-1])
+	cmd.Env = []string{"PATH=" + dir}
+	err = cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 42 {
+		t.Fatalf("bootstrap failure hidden behind Docker: %v", err)
+	}
+}
+
+func TestBundledKeysAcceptGeneratedRSAAndECDSA(t *testing.T) {
+	var candidates [][][]byte
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates = append(candidates, [][]byte{[]byte("ssh-rsa"), {1, 0, 1}, append([]byte{0}, key.N.Bytes()...)})
+	for _, curve := range []elliptic.Curve{elliptic.P256(), elliptic.P384(), elliptic.P521()} {
+		key, err := ecdsa.GenerateKey(curve, rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := "nistp" + strconv.Itoa(curve.Params().BitSize)
+		candidates = append(candidates, [][]byte{[]byte("ecdsa-sha2-" + name), []byte(name), elliptic.Marshal(curve, key.X, key.Y)})
+	}
+	for _, parts := range candidates {
+		var wire []byte
+		for _, part := range parts {
+			wire = binary.BigEndian.AppendUint32(wire, uint32(len(part)))
+			wire = append(wire, part...)
+		}
+		key := string(parts[0]) + " " + base64.StdEncoding.EncodeToString(wire)
+		if !validPublicKey(key) {
+			t.Fatalf("valid generated key rejected: %s", parts[0])
+		}
 	}
 }

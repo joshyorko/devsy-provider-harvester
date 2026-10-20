@@ -289,7 +289,11 @@ For a **new** VM backed by an Ubuntu 24.04 cloud image, select
 explicit; this profile does not import images or install an OS from an ISO.
 Unset any complete inline, file, or ConfigMap source before selecting a profile.
 Conflicts fail without merging or overwriting saved custom configuration.
-Existing VMs are reused without applying changed cloud-init options.
+Existing VMs are reused without applying changed cloud-init options. Their
+original profile is recorded on the VM and controls readiness checks, even if
+you later change the provider setting. Existing custom VMs keep their original
+SSH/Docker readiness checks. ISO images are rejected before disk creation when
+a bundled profile is selected.
 
 The helper embeds the same profile on Linux amd64/arm64, macOS amd64/arm64,
 and Windows amd64. Bundled user-data is gzip-compressed and base64-encoded to
@@ -309,6 +313,7 @@ for guest IP, SSH, successful cloud-init completion, the active QEMU guest agent
 Docker access as the SSH user, and Compose/Buildx. Each probe remains bounded to
 ten seconds. Bootstrap stages and package diagnostics remain in the guest's
 `/var/log/cloud-init-output.log`; they never enter status or workspace SSH output.
+Terminal cloud-init failures stop readiness immediately with diagnostic guidance.
 On timeout, inspect that file and `cloud-init status --long` in the guest. A retry
 reuses the VM rather than overwriting its disk or rerunning successful cloud-init.
 

@@ -144,6 +144,10 @@ func init() {
 			io.WriteString(os.Stdout, fmtKind+" applied\n")
 		}
 	case "ssh":
+		if code := os.Getenv("HARVESTER_TEST_SSH_EXIT_CODE"); code != "" {
+			n, _ := strconv.Atoi(code)
+			os.Exit(n)
+		}
 		if noise := os.Getenv("HARVESTER_TEST_SSH_ERROR_OUTPUT"); noise != "" {
 			fmt.Fprint(os.Stderr, noise)
 			os.Exit(1)

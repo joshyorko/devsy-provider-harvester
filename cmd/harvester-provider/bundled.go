@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/elliptic"
 	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -76,10 +78,18 @@ func validPublicKey(key string) bool {
 	case "ssh-ed25519":
 		return len(parts) == 2 && len(parts[1]) == 32
 	case "ssh-rsa":
-		return len(parts) == 3 && len(parts[1]) > 0 && len(parts[2]) >= 256
+		if len(parts) != 3 || len(parts[1]) == 0 || len(parts[2]) == 0 || parts[1][0]&0x80 != 0 || parts[2][0]&0x80 != 0 {
+			return false
+		}
+		e, n := new(big.Int).SetBytes(parts[1]), new(big.Int).SetBytes(parts[2])
+		return e.IsInt64() && e.Int64() >= 3 && e.Int64() <= 1<<31-1 && e.Bit(0) == 1 && n.BitLen() >= 2048 && n.Bit(0) == 1
 	case "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521":
-		sizes := map[string]int{"nistp256": 65, "nistp384": 97, "nistp521": 133}
-		return len(parts) == 3 && fields[0] == "ecdsa-sha2-"+string(parts[1]) && len(parts[2]) == sizes[string(parts[1])] && parts[2][0] == 4
+		curves := map[string]elliptic.Curve{"nistp256": elliptic.P256(), "nistp384": elliptic.P384(), "nistp521": elliptic.P521()}
+		if len(parts) != 3 || fields[0] != "ecdsa-sha2-"+string(parts[1]) || curves[string(parts[1])] == nil {
+			return false
+		}
+		x, _ := elliptic.Unmarshal(curves[string(parts[1])], parts[2])
+		return x != nil
 	}
 	return false
 }

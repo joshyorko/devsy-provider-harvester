@@ -16,7 +16,9 @@ client, including when Devsy runs on Windows or inside a container.
 ## VM and storage
 
 These settings apply when provisioning a new VM. Reattachment does not rewrite
-an existing VM or disk claim. See [existing-machine behavior](../README.md#reusing-an-existing-machine).
+an existing VM or disk claim. Bundled-profile VMs retain their original readiness
+checks through a saved VM annotation; changing this option does not bootstrap
+an existing custom VM. See [existing-machine behavior](../README.md#reusing-an-existing-machine).
 
 | Option | Default | Description |
 | --- | --- | --- |
