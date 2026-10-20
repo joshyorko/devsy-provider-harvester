@@ -21,7 +21,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.15 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.16 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -69,31 +69,26 @@ do not resize or reconfigure an existing VM.
 
 On **Devsy Desktop v1.24 or newer**, configure the kubeconfig, context and
 `HARVESTER_IMAGE_NAMESPACE`, initialize the provider, then reopen its options.
-Choose **HARVESTER_IMAGE_CHOICE** to see imported images by display name, with
-their namespace/resource reference alongside the label. On a new installation
-the wizard does not load dynamic choices before initialization, so this is a
-two-step setup. No image is selected automatically, even when only one is ready.
+Use the **Image** dropdown to choose an imported, ready image by its Harvester
+display name, such as `rocky9` or `ubuntu-noble`. Internal image IDs stay hidden.
+On a new installation the wizard does not load dynamic choices before
+initialization, so this is a two-step setup. No image is selected automatically,
+even when only one is ready.
 
-The catalog selection saves the exact namespaced resource reference and survives
-provider updates and catalog namespace changes. Changing a display name does not
-switch the selected image. Choose **Use manual image setting** to clear the
-catalog selection and use `HARVESTER_IMAGE` instead. Existing saved manual values
-are preserved when upgrading.
-
-Manual `HARVESTER_IMAGE` accepts a resource name, an exact `NAMESPACE/NAME`
-reference, or a unique display name in `HARVESTER_IMAGE_NAMESPACE`. Exact resource
-names take priority. Ambiguous display names fail with matching references;
-unready, deleting or missing images fail before disk creation. A slash denotes
-an exact reference, and Harvester-generated `image-...` IDs are never reinterpreted
-as display names. Use the picker or an exact namespaced reference for a stable pin;
-manual display-name input is resolved when provisioning each new VM.
+The selection saves the exact image reference internally and survives provider
+updates. Existing saved image values migrate into the dropdown when they match
+an available image. Changing a display name does not switch the selected image.
+Choose **Select an image** to clear the selection. A new VM requires a selection;
+there is no separate manual image field. Images with duplicate display names
+must be renamed in Harvester before selecting them.
 
 Catalog discovery needs permission to list Harvester images in the selected
 namespace, but no guest SSH access. If discovery fails, the selector reports
-**catalog unavailable** and retains the saved selection; existing exact-reference
-configurations with image-GET-only access still work. Reinitialize or save provider
-options to refresh the catalog; edits to unsaved connection fields do not refresh
-it live.
+**catalog unavailable** and retains a saved image when it can verify that image
+with GET access. Connection errors stop refresh rather than clearing the saved
+selection. Reinitialize or save provider options to refresh the catalog; edits
+to unsaved connection fields do not refresh it live. Changing the image namespace
+clears a selection that is absent from the new catalog.
 
 The released helper also provides a read-only catalog command. For example, on a
 Linux client after downloading the helper:
