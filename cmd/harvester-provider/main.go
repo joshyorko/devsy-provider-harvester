@@ -27,7 +27,7 @@ func env(n, fallback string) string {
 	return fallback
 }
 func load() config {
-	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), os.Getenv("HARVESTER_IMAGE"), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA"), os.Getenv("HARVESTER_USER_DATA_FILE"), os.Getenv("HARVESTER_CLOUD_INIT_TEMPLATE"), os.Getenv("HARVESTER_NETWORK")}
+	return config{env("KUBECONFIG", ""), os.Getenv("HARVESTER_CONTEXT"), env("HARVESTER_NAMESPACE", "default"), env("HARVESTER_VM_NAME", env("MACHINE_ID", "devsy-workspace")), env("HARVESTER_IMAGE_PIN", os.Getenv("HARVESTER_IMAGE")), env("HARVESTER_IMAGE_NAMESPACE", "harvester-public"), env("HARVESTER_IMAGE_TYPE", "raw"), os.Getenv("HARVESTER_STORAGE_CLASS"), env("HARVESTER_CPU", "4"), env("HARVESTER_MEMORY", "8Gi"), env("HARVESTER_DISK", "40Gi"), os.Getenv("HARVESTER_SSH_HOST"), env("HARVESTER_SSH_USER", "ubuntu"), env("HARVESTER_SSH_PORT", "22"), os.Getenv("HARVESTER_SSH_FLAGS"), os.Getenv("HARVESTER_SSH_PUBLIC_KEY"), os.Getenv("HARVESTER_USER_DATA"), os.Getenv("HARVESTER_USER_DATA_FILE"), os.Getenv("HARVESTER_CLOUD_INIT_TEMPLATE"), os.Getenv("HARVESTER_NETWORK")}
 }
 
 func progress(message string) {
@@ -249,37 +249,6 @@ func kubectlInputContext(parent context.Context, c config, input []byte, args ..
 		return out, fmt.Errorf("kubectl: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
 	return out, nil
-}
-func resolveImage(c config) (imageInfo, error) {
-	image, err := parseImageReference(c.Image, c.ImageNS)
-	if err != nil {
-		return image, err
-	}
-	out, err := kubectl(c, "get", "virtualmachineimage", image.Name, "-n", image.Namespace, "-o", "json")
-	if err != nil {
-		return image, err
-	}
-	var payload struct {
-		Spec struct {
-			Backend string `json:"backend"`
-			URL     string `json:"url"`
-		} `json:"spec"`
-		Status struct {
-			StorageClassName string `json:"storageClassName"`
-		} `json:"status"`
-	}
-	if err = json.Unmarshal(out, &payload); err != nil {
-		return image, err
-	}
-	image.StorageClass = payload.Status.StorageClassName
-	if image.StorageClass == "" {
-		return image, errors.New("Harvester image has no resolved storage class yet")
-	}
-	image.Format = c.ImageType
-	if payload.Spec.Backend == "cdi" && image.Format == "raw" && strings.HasSuffix(strings.ToLower(payload.Spec.URL), ".iso") {
-		image.Format = "iso"
-	}
-	return image, nil
 }
 func createJSON(c config, object any) error {
 	payload, err := json.Marshal(object)
@@ -617,6 +586,15 @@ func main() {
 	}
 	var err error
 	switch op {
+	case "image-options":
+		err = printImageOptions(c, os.Stdout)
+	case "images":
+		fs := flag.NewFlagSet("images", flag.ContinueOnError)
+		asJSON := fs.Bool("json", false, "Output the image catalog as JSON")
+		err = fs.Parse(os.Args[2:])
+		if err == nil {
+			err = printImages(c, *asJSON, os.Stdout)
+		}
 	case "init":
 		progress("Resolving cloud-init configuration")
 		_, err = resolveUserData(c)
@@ -674,7 +652,7 @@ func main() {
 		_ = fs.Parse(os.Args[2:])
 		err = sshCommand(c, *command)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: harvester-provider {init|create|delete|start|stop|status|command}")
+		fmt.Fprintln(os.Stderr, "usage: harvester-provider {init|create|delete|start|stop|status|command|images|image-options}")
 		os.Exit(2)
 	}
 	if err != nil {

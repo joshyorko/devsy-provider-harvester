@@ -48,12 +48,30 @@ func init() {
 					os.Exit(7)
 				}
 			}
-		case strings.Contains(args, "get virtualmachineimage"):
+		case strings.Contains(args, "get virtualmachineimages "):
+			if os.Getenv("HARVESTER_TEST_IMAGE_LIST_FAILURE") == "1" {
+				os.Stderr.WriteString("forbidden listing images")
+				os.Exit(1)
+			}
+			data, err := os.ReadFile(os.Getenv("HARVESTER_TEST_IMAGE_LIST"))
+			if err != nil {
+				os.Exit(2)
+			}
+			os.Stdout.Write(data)
+		case strings.Contains(args, "get virtualmachineimage "):
 			if os.Getenv("HARVESTER_TEST_IMAGE_FAILURE") == "1" {
 				os.Stderr.WriteString("image is unavailable")
 				os.Exit(1)
 			}
-			io.WriteString(os.Stdout, `{"status":{"storageClassName":"test-image-storage"}}`)
+			if file := os.Getenv("HARVESTER_TEST_IMAGE_OBJECT"); file != "" {
+				data, err := os.ReadFile(file)
+				if err != nil {
+					os.Exit(2)
+				}
+				os.Stdout.Write(data)
+				break
+			}
+			io.WriteString(os.Stdout, `{"metadata":{"name":"test-image","namespace":"harvester-public"},"status":{"storageClassName":"test-image-storage","conditions":[{"type":"Imported","status":"True"}]}}`)
 		case strings.Contains(args, "get virtualmachine "):
 			if strings.Contains(args, "jsonpath={.metadata.uid}") {
 				if os.Getenv("HARVESTER_TEST_UID_FAILURE") == "1" {
@@ -191,6 +209,8 @@ func lifecycleFixture(t *testing.T) string {
 		t.Setenv(name, "")
 	}
 	t.Setenv("HARVESTER_IMAGE", "test-image")
+	t.Setenv("HARVESTER_IMAGE_PIN", "")
+	t.Setenv("HARVESTER_IMAGE_CHOICE", "")
 	t.Setenv("HARVESTER_IMAGE_TYPE", "qcow2")
 	t.Setenv("HARVESTER_USER_DATA", "#cloud-config\nsecret-fixture-must-not-be-logged\n")
 	return exe

@@ -21,7 +21,7 @@ discover releases and consume the checksummed release manifest:
 ```sh
 devsy provider add github.com/joshyorko/devsy-provider-harvester
 # Preserve an existing registration and its saved options:
-devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.14 --use=false
+devsy provider set-source harvester github.com/joshyorko/devsy-provider-harvester --version v0.1.15 --use=false
 devsy provider init harvester
 devsy provider versions harvester --json --no-cache
 ```
@@ -67,8 +67,46 @@ do not resize or reconfigure an existing VM.
 
 ## Image selection
 
-The VM root disk is selected with `HARVESTER_IMAGE` and
-`HARVESTER_IMAGE_NAMESPACE`. The provider resolves the image's Harvester
+On **Devsy Desktop v1.24 or newer**, configure the kubeconfig, context and
+`HARVESTER_IMAGE_NAMESPACE`, initialize the provider, then reopen its options.
+Choose **HARVESTER_IMAGE_CHOICE** to see imported images by display name, with
+their namespace/resource reference alongside the label. On a new installation
+the wizard does not load dynamic choices before initialization, so this is a
+two-step setup. No image is selected automatically, even when only one is ready.
+
+The catalog selection saves the exact namespaced resource reference and survives
+provider updates and catalog namespace changes. Changing a display name does not
+switch the selected image. Choose **Use manual image setting** to clear the
+catalog selection and use `HARVESTER_IMAGE` instead. Existing saved manual values
+are preserved when upgrading.
+
+Manual `HARVESTER_IMAGE` accepts a resource name, an exact `NAMESPACE/NAME`
+reference, or a unique display name in `HARVESTER_IMAGE_NAMESPACE`. Exact resource
+names take priority. Ambiguous display names fail with matching references;
+unready, deleting or missing images fail before disk creation. A slash denotes
+an exact reference, and Harvester-generated `image-...` IDs are never reinterpreted
+as display names. Use the picker or an exact namespaced reference for a stable pin;
+manual display-name input is resolved when provisioning each new VM.
+
+Catalog discovery needs permission to list Harvester images in the selected
+namespace, but no guest SSH access. If discovery fails, the selector reports
+**catalog unavailable** and retains the saved selection; existing exact-reference
+configurations with image-GET-only access still work. Reinitialize or save provider
+options to refresh the catalog; edits to unsaved connection fields do not refresh
+it live.
+
+The released helper also provides a read-only catalog command. For example, on a
+Linux client after downloading the helper:
+
+```sh
+KUBECONFIG=/path/to/harvester.yaml HARVESTER_IMAGE_NAMESPACE=default \
+  ./harvester-provider-linux-amd64 images
+```
+
+Add `--json` for display names, exact references and readiness in machine-readable
+form. This command reports API errors instead of returning a successful empty list.
+
+The provider resolves the selected image's Harvester
 storage class before creating an image-backed PVC and attaching it to the
 KubeVirt VM. Set `HARVESTER_IMAGE_TYPE` to `raw`, `qcow2`, or `iso`; ISO images
 are attached as a CD-ROM alongside a separate writable root disk. Supply
