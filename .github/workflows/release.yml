@@ -8,10 +8,11 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version: "1.23"
+          cache: false
       - name: Test Windows helper
         shell: pwsh
         run: |
@@ -29,10 +30,11 @@ jobs:
     needs: windows
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version: "1.23"
+          cache: false
       - name: Build binaries
         run: |
           mkdir -p dist
@@ -46,7 +48,7 @@ jobs:
           python3 -m unittest discover -s scripts -v
           python3 scripts/package_release.py "$GITHUB_REF_NAME"
           (cd dist && sha256sum -c checksums.txt)
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3.0.3
         with:
           files: |
             dist/harvester-provider-*
